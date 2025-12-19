@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS replays (
     game_length_sec INTEGER,
     player_mmr INTEGER,
     opponent_mmr INTEGER,
+    player_apm INTEGER,
+    opponent_apm INTEGER,
 
     -- Worker metrics
     workers_6m INTEGER,
@@ -102,6 +104,10 @@ def get_replays(
     map_name: Optional[str] = None,
     days: Optional[int] = None,
     limit: Optional[int] = None,
+    min_length: Optional[int] = None,
+    max_length: Optional[int] = None,
+    min_workers_8m: Optional[int] = None,
+    max_workers_8m: Optional[int] = None,
 ) -> list:
     """
     Query replays with optional filters.
@@ -126,6 +132,22 @@ def get_replays(
     if days:
         query += " AND played_at >= datetime('now', ?)"
         params.append(f"-{days} days")
+
+    if min_length is not None:
+        query += " AND game_length_sec >= ?"
+        params.append(min_length)
+
+    if max_length is not None:
+        query += " AND game_length_sec <= ?"
+        params.append(max_length)
+
+    if min_workers_8m is not None:
+        query += " AND workers_8m >= ?"
+        params.append(min_workers_8m)
+
+    if max_workers_8m is not None:
+        query += " AND workers_8m <= ?"
+        params.append(max_workers_8m)
 
     query += " ORDER BY played_at DESC"
 

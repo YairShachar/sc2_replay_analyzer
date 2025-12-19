@@ -101,6 +101,8 @@ def get_column_value(col_key: str, r: dict):
         "result": lambda: format_result(r.get("result")),
         "mmr": lambda: format_mmr(r.get("player_mmr"), r.get("opponent_mmr")),
         "opponent_mmr": lambda: str(r.get("opponent_mmr") or "-"),
+        "apm": lambda: str(r.get("player_apm") or "-"),
+        "opponent_apm": lambda: str(r.get("opponent_apm") or "-"),
         "workers_6m": lambda: format_workers(r.get("workers_6m"), BENCHMARK_WORKERS_6M),
         "workers_8m": lambda: format_workers(r.get("workers_8m"), BENCHMARK_WORKERS_8M),
         "workers_10m": lambda: str(r.get("workers_10m") or "-"),
@@ -136,7 +138,6 @@ def show_replays_table(replays: list):
         table.add_row(*row_values)
 
     console.print(table)
-    console.print(f"\n[dim]Showing {len(replays)} game(s). '!' = below worker benchmark[/dim]")
 
 
 def show_latest_game(replay: dict):
@@ -162,6 +163,12 @@ def show_latest_game(replay: dict):
         mmr_diff = player_mmr - opponent_mmr if opponent_mmr else 0
         diff_str = f" ([green]+{mmr_diff}[/green])" if mmr_diff > 0 else f" ([red]{mmr_diff}[/red])" if mmr_diff < 0 else ""
         lines.append(f"[bold]MMR:[/bold] {player_mmr} vs {opponent_mmr or '?'}{diff_str}")
+
+    # APM
+    player_apm = replay.get("player_apm")
+    opponent_apm = replay.get("opponent_apm")
+    if player_apm:
+        lines.append(f"[bold]APM:[/bold] {player_apm} vs {opponent_apm or '?'}")
     lines.append("")
 
     # Worker stats
@@ -280,3 +287,324 @@ def show_scan_complete(new_count: int, total_count: int):
     """Show scan completion message."""
     console.print(" " * 80, end="\r")  # Clear progress line
     console.print(f"[green]Scan complete![/green] Added {new_count} new replay(s). Total: {total_count}")
+
+
+def calculate_summary(replays: list) -> dict:
+    """Calculate summary statistics for a list of replays."""
+    if not replays:
+        return {}
+
+    wins = sum(1 for r in replays if (r.get("result") or "").lower() == "win")
+    losses = sum(1 for r in replays if (r.get("result") or "").lower() == "loss")
+    total = wins + losses
+    winrate = (wins / total * 100) if total > 0 else 0
+
+    # Calculate averages, excluding None values
+    apms = [r.get("player_apm") for r in replays if r.get("player_apm") is not None]
+    workers = [r.get("workers_8m") for r in replays if r.get("workers_8m") is not None]
+    lengths = [r.get("game_length_sec") for r in replays if r.get("game_length_sec") is not None]
+
+    return {
+        "wins": wins,
+        "losses": losses,
+        "winrate": winrate,
+        "avg_apm": sum(apms) / len(apms) if apms else None,
+        "avg_workers_8m": sum(workers) / len(workers) if workers else None,
+        "avg_length": sum(lengths) / len(lengths) if lengths else None,
+    }
+
+
+def show_summary_row(replays: list):
+    """Display summary statistics below the table."""
+    stats = calculate_summary(replays)
+    if not stats:
+        return
+
+    parts = []
+
+    # Win/Loss ratio with color
+    wins, losses = stats["wins"], stats["losses"]
+    winrate = stats["winrate"]
+    wr_style = "green" if winrate >= 50 else "red"
+    parts.append(f"[green]{wins}W[/green] / [red]{losses}L[/red] ([{wr_style}]{winrate:.1f}%[/{wr_style}])")
+
+    # Averages
+    if stats["avg_apm"] is not None:
+        parts.append(f"Avg APM: {stats['avg_apm']:.0f}")
+
+    if stats["avg_workers_8m"] is not None:
+        parts.append(f"Avg W@8m: {stats['avg_workers_8m']:.0f}")
+
+    if stats["avg_length"] is not None:
+        parts.append(f"Avg Length: {format_duration(int(stats['avg_length']))}")
+
+    console.print("  " + "  |  ".join(parts))
+
+
+# ============================================================
+# INTERACTIVE MODE
+# ============================================================
+
+from dataclasses import dataclass, field
+import re
+
+
+@dataclass
+class FilterState:
+    """Holds the current filter state for interactive mode."""
+    limit: int = 50
+    matchup: Optional[str] = None
+    result: Optional[str] = None
+    map_name: Optional[str] = None
+    days: Optional[int] = None
+    min_length: Optional[int] = None  # seconds
+    max_length: Optional[int] = None
+    min_workers_8m: Optional[int] = None
+    max_workers_8m: Optional[int] = None
+
+    def describe(self, count: int) -> str:
+        """Return human-readable filter description."""
+        # Start with base description
+        parts = []
+
+        # Game type
+        if self.matchup:
+            parts.append(f"{self.matchup} games")
+        elif self.result:
+            result_word = "wins" if self.result.lower() == "win" else "losses"
+            parts.append(result_word)
+        else:
+            parts.append("games")
+
+        # Add result if we have matchup
+        if self.matchup and self.result:
+            result_word = "wins" if self.result.lower() == "win" else "losses"
+            parts[-1] = f"{self.matchup} {result_word}"
+
+        # Map filter
+        if self.map_name:
+            parts.append(f"on '{self.map_name}'")
+
+        # Time filters
+        if self.days:
+            parts.append(f"from last {self.days} days")
+
+        # Length filters
+        length_parts = []
+        if self.min_length:
+            mins = self.min_length // 60
+            secs = self.min_length % 60
+            length_parts.append(f"> {mins}:{secs:02d}")
+        if self.max_length:
+            mins = self.max_length // 60
+            secs = self.max_length % 60
+            length_parts.append(f"< {mins}:{secs:02d}")
+        if length_parts:
+            parts.append(f"length {', '.join(length_parts)}")
+
+        # Worker filters
+        worker_parts = []
+        if self.min_workers_8m:
+            worker_parts.append(f"> {self.min_workers_8m}")
+        if self.max_workers_8m:
+            worker_parts.append(f"< {self.max_workers_8m}")
+        if worker_parts:
+            parts.append(f"workers@8m {', '.join(worker_parts)}")
+
+        # Build final string
+        base = parts[0]
+        modifiers = parts[1:] if len(parts) > 1 else []
+
+        result = f"Showing {count} {base}"
+        if modifiers:
+            result += ", " + ", ".join(modifiers)
+
+        return result
+
+    def reset(self):
+        """Reset all filters to defaults."""
+        self.matchup = None
+        self.result = None
+        self.map_name = None
+        self.days = None
+        self.min_length = None
+        self.max_length = None
+        self.min_workers_8m = None
+        self.max_workers_8m = None
+        self.limit = 50
+
+
+def parse_time(time_str: str) -> int:
+    """Parse time string like '8:00' or '8' to seconds."""
+    if ':' in time_str:
+        parts = time_str.split(':')
+        return int(parts[0]) * 60 + int(parts[1])
+    return int(time_str) * 60  # Assume minutes if no colon
+
+
+def parse_filter_command(cmd: str, state: FilterState) -> tuple:
+    """
+    Parse a filter command and update state.
+    Returns (state, error_message or None)
+    """
+    cmd = cmd.strip()
+
+    if not cmd:
+        return state, None
+
+    if cmd.lower() in ('clear', 'reset'):
+        state.reset()
+        return state, None
+
+    if cmd.lower() in ('h', 'help', '?'):
+        return state, "HELP"
+
+    # Parse -n <num>
+    match = re.match(r'-n\s+(\d+)', cmd)
+    if match:
+        state.limit = int(match.group(1))
+        return state, None
+
+    # Parse -m <matchup>
+    match = re.match(r'-m\s+(\w+)', cmd, re.IGNORECASE)
+    if match:
+        matchup = match.group(1).upper()
+        # Normalize: tvz -> TvZ
+        if len(matchup) == 3 and matchup[1] == 'V':
+            matchup = f"{matchup[0]}v{matchup[2]}"
+        state.matchup = matchup
+        return state, None
+
+    # Parse -r <result> (W/L/win/loss)
+    match = re.match(r'-r\s+(\w+)', cmd, re.IGNORECASE)
+    if match:
+        result = match.group(1).lower()
+        if result in ('w', 'win'):
+            state.result = 'Win'
+        elif result in ('l', 'loss'):
+            state.result = 'Loss'
+        else:
+            state.result = result.capitalize()
+        return state, None
+
+    # Parse -l <op><time> (e.g., -l >8:00, -l <5:00, -l >=10:00, -l <=5:00)
+    match = re.match(r'-l\s*([<>]=?)\s*([\d:]+)', cmd)
+    if match:
+        op, time_str = match.groups()
+        seconds = parse_time(time_str)
+        if op in ('>', '>='):
+            state.min_length = seconds
+        else:
+            state.max_length = seconds
+        return state, None
+
+    # Parse -w <op><num> (e.g., -w <40, -w >50, -w >=45, -w <=30)
+    match = re.match(r'-w\s*([<>]=?)\s*(\d+)', cmd)
+    if match:
+        op, num = match.groups()
+        if op in ('>', '>='):
+            state.min_workers_8m = int(num)
+        else:
+            state.max_workers_8m = int(num)
+        return state, None
+
+    # Parse --map <name>
+    match = re.match(r'--map\s+(.+)', cmd, re.IGNORECASE)
+    if match:
+        state.map_name = match.group(1).strip()
+        return state, None
+
+    # Parse -d <days>
+    match = re.match(r'-d\s+(\d+)', cmd)
+    if match:
+        state.days = int(match.group(1))
+        return state, None
+
+    return state, f"Unknown command: {cmd}"
+
+
+def show_help():
+    """Display help for interactive mode commands."""
+    help_text = """
+[bold cyan]Available Commands:[/bold cyan]
+
+  [green]-n <num>[/green]      Limit to N games         [dim]e.g. -n 50[/dim]
+  [green]-m <matchup>[/green]  Filter by matchup        [dim]e.g. -m TvZ[/dim]
+  [green]-r <result>[/green]   Filter by result         [dim]e.g. -r W, -r L[/dim]
+  [green]-l <op><time>[/green] Filter by game length    [dim]e.g. -l >=8:00, -l <5:00[/dim]
+  [green]-w <op><num>[/green]  Filter by workers @8m    [dim]e.g. -w <=40, -w >50[/dim]
+  [green]--map <name>[/green]  Filter by map name       [dim]e.g. --map Pylon[/dim]
+  [green]-d <days>[/green]     Games from last N days   [dim]e.g. -d 7[/dim]
+
+  [yellow]clear[/yellow]        Reset all filters
+  [yellow]help[/yellow]         Show this help
+  [yellow]q[/yellow]            Quit
+
+[dim]Operators: > >= < <=   |   Filters stack together. Use 'clear' to reset all.[/dim]
+"""
+    console.print(help_text)
+
+
+def run_interactive_mode():
+    """Run the interactive filtering mode."""
+    import db
+
+    db.init_db()
+    state = FilterState()
+
+    console.print()
+    console.print("[bold cyan]SC2 Replay Analyzer - Interactive Mode[/bold cyan]")
+    console.print("[dim]Type commands to filter. 'help' for options, 'q' to quit.[/dim]")
+    console.print()
+
+    need_refresh = True  # Flag to control when to redraw table
+
+    while True:
+        if need_refresh:
+            # Fetch and display replays with current filters
+            replays = db.get_replays(
+                matchup=state.matchup,
+                result=state.result,
+                map_name=state.map_name,
+                days=state.days,
+                limit=state.limit,
+                min_length=state.min_length,
+                max_length=state.max_length,
+                min_workers_8m=state.min_workers_8m,
+                max_workers_8m=state.max_workers_8m,
+            )
+
+            # Display table
+            show_replays_table(replays)
+
+            # Show summary row
+            show_summary_row(replays)
+
+            # Show filter status below table
+            filter_desc = state.describe(len(replays))
+            console.print(f"[dim]{filter_desc}[/dim]")
+
+        need_refresh = True  # Default to refresh on next iteration
+
+        # Get user input
+        try:
+            console.print()
+            cmd = console.input("[bold green]> [/bold green]").strip()
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]Goodbye![/dim]")
+            break
+
+        if cmd.lower() in ('q', 'quit', 'exit'):
+            console.print("[dim]Goodbye![/dim]")
+            break
+
+        # Parse and apply command
+        state, error = parse_filter_command(cmd, state)
+
+        if error == "HELP":
+            show_help()
+            need_refresh = False  # Stay on current view after help
+        elif error:
+            console.print(f"[red]{error}[/red]")
+            console.print("[dim]Type 'help' for available commands.[/dim]")
+            need_refresh = False  # Stay on current view after error

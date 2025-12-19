@@ -125,6 +125,17 @@ def parse_replay(replay_path: str) -> dict:
     player_mmr = get_mmr(me)
     opponent_mmr = get_mmr(opp)
 
+    # Calculate APM (Actions Per Minute) from events
+    def get_apm(player, length_sec):
+        if length_sec <= 0:
+            return None
+        events = getattr(player, 'events', [])
+        game_minutes = length_sec / 60
+        return int(len(events) / game_minutes) if game_minutes > 0 else None
+
+    player_apm = get_apm(me, game_length)
+    opponent_apm = get_apm(opp, game_length)
+
     data = {
         "replay_id": replay_id,
         "file_path": replay_path,
@@ -137,6 +148,8 @@ def parse_replay(replay_path: str) -> dict:
         "game_length_sec": game_length,
         "player_mmr": player_mmr,
         "opponent_mmr": opponent_mmr,
+        "player_apm": player_apm,
+        "opponent_apm": opponent_apm,
 
         # Workers at snapshots
         "workers_6m": alive_at(units, me.pid, WORKERS, 360) if game_length >= 360 else None,

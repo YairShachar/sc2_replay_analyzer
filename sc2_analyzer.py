@@ -139,6 +139,11 @@ def cmd_export(args):
     ui.console.print(f"[green]Exported {len(replays)} replay(s) to:[/green] {output_path}")
 
 
+def cmd_live(args):
+    """Run interactive filtering mode."""
+    ui.run_interactive_mode()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="SC2 Replay Analyzer - Track your StarCraft II progress",
@@ -179,6 +184,10 @@ def main():
     export_parser.add_argument("--days", "-d", type=int, help="Only include games from last N days")
     export_parser.add_argument("--last", "-l", type=int, help="Export last N games")
     export_parser.set_defaults(func=cmd_export)
+
+    # live command
+    live_parser = subparsers.add_parser("live", help="Interactive filtering mode")
+    live_parser.set_defaults(func=cmd_live)
 
     args = parser.parse_args()
 
