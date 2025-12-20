@@ -36,7 +36,7 @@ sc2 stats
 
 | Command | Description |
 |---------|-------------|
-| `sc2` | First run: setup wizard. After: show recent games |
+| `sc2` | First run: setup wizard. After: auto-scan + interactive mode |
 | `sc2 scan` | Scan replay folder for new games |
 | `sc2 live` | Interactive filtering mode |
 | `sc2 stats` | Show aggregate statistics |
