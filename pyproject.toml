@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61.0,<69.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sc2_replay_analyzer"
+version = "0.1.0"
+description = "Analyze your StarCraft II replays with filtering, stats, and beautiful terminal output"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+authors = [
+    {name = "Yair Shachar", email = "yair@example.com"}
+]
+keywords = ["starcraft", "sc2", "replay", "analyzer", "esports", "gaming"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Games/Entertainment :: Real Time Strategy",
+]
+dependencies = [
+    "sc2reader>=1.8.0",
+    "rich>=13.0.0",
+    "tomli>=2.0.0;python_version<'3.11'",
+    "tomli-w>=1.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/YairShachar/sc2_replay_analyzer"
+Repository = "https://github.com/YairShachar/sc2_replay_analyzer"
+Issues = "https://github.com/YairShachar/sc2_replay_analyzer/issues"
+
+[project.scripts]
+sc2 = "sc2_replay_analyzer.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

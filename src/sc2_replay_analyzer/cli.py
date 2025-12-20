@@ -1,26 +1,35 @@
 #!/usr/bin/env python3
 """
-SC2 Replay Analyzer
+SC2 Replay Analyzer CLI
 
 Analyze your StarCraft II replays with filtering, stats, and beautiful terminal output.
 
 Usage:
-    python sc2_analyzer.py scan              # Scan replay folder for new games
-    python sc2_analyzer.py show              # Show recent games
-    python sc2_analyzer.py latest            # Show stats for most recent game
-    python sc2_analyzer.py stats             # Show aggregate statistics
-    python sc2_analyzer.py export            # Export to CSV
+    sc2                    # First run: setup. After: show recent games
+    sc2 scan               # Scan replay folder for new games
+    sc2 live               # Interactive filtering mode
+    sc2 stats              # Show aggregate statistics
+    sc2 config             # Re-run setup / change settings
+    sc2 export             # Export to CSV
 """
 import argparse
 import csv
-import os
 import sys
 from pathlib import Path
 
-from config import REPLAY_FOLDER, PLAYER_NAME
-import db
-from parser import parse_replay, sha1
-import ui
+from . import db
+from .config import (
+    config_exists,
+    load_config,
+    save_config,
+    find_replay_folders,
+    validate_player_name,
+    get_player_name,
+    get_replay_folder,
+    DEFAULT_CONFIG,
+)
+from .parser import parse_replay, sha1
+from . import ui
 
 
 def find_replays(folder: str) -> list:
@@ -34,17 +43,119 @@ def find_replays(folder: str) -> list:
     return sorted(replays, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
+def run_setup_wizard() -> bool:
+    """
+    Run the first-time setup wizard.
+    Returns True if setup completed successfully.
+    """
+    ui.console.print()
+    ui.console.print("[bold cyan]Welcome to SC2 Replay Analyzer![/bold cyan]")
+    ui.console.print()
+    ui.console.print("Let's set up your configuration.")
+    ui.console.print()
+
+    config = DEFAULT_CONFIG.copy()
+
+    # Step 1: Find replay folder
+    ui.console.print("[bold]Searching for SC2 replay folders...[/bold]")
+    folders = find_replay_folders()
+
+    if not folders:
+        ui.console.print("[yellow]No replay folders found automatically.[/yellow]")
+        ui.console.print()
+        replay_folder = ui.console.input("Enter the path to your Replays/Multiplayer folder: ").strip()
+        if not Path(replay_folder).exists():
+            ui.console.print(f"[red]Folder not found:[/red] {replay_folder}")
+            return False
+    elif len(folders) == 1:
+        ui.console.print(f"[green]Found:[/green] {folders[0]}")
+        ui.console.print()
+        use_it = ui.console.input("Use this folder? [Y/n]: ").strip().lower()
+        if use_it in ('n', 'no'):
+            replay_folder = ui.console.input("Enter the path to your Replays/Multiplayer folder: ").strip()
+        else:
+            replay_folder = folders[0]
+    else:
+        ui.console.print("[green]Found multiple replay folders:[/green]")
+        for i, folder in enumerate(folders, 1):
+            ui.console.print(f"  {i}. {folder}")
+        ui.console.print()
+        choice = ui.console.input(f"Choose folder [1-{len(folders)}]: ").strip()
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(folders):
+                replay_folder = folders[idx]
+            else:
+                ui.console.print("[red]Invalid choice.[/red]")
+                return False
+        except ValueError:
+            ui.console.print("[red]Invalid choice.[/red]")
+            return False
+
+    config["replay_folder"] = replay_folder
+    ui.console.print()
+
+    # Step 2: Get player name
+    player_name = ui.console.input("Enter your SC2 player name: ").strip()
+    if not player_name:
+        ui.console.print("[red]Player name cannot be empty.[/red]")
+        return False
+
+    # Step 3: Validate player name
+    ui.console.print()
+    ui.console.print("[bold]Validating player name...[/bold]")
+    found, checked = validate_player_name(player_name, replay_folder)
+
+    if found > 0:
+        ui.console.print(f"[green]Found {found} games as \"{player_name}\"[/green]")
+    elif checked > 0:
+        ui.console.print(f"[yellow]Warning: Player \"{player_name}\" not found in {checked} recent replays.[/yellow]")
+        confirm = ui.console.input("Continue anyway? [y/N]: ").strip().lower()
+        if confirm not in ('y', 'yes'):
+            return False
+    else:
+        ui.console.print("[yellow]Could not validate player name (no replays found).[/yellow]")
+
+    config["player_name"] = player_name
+
+    # Save config
+    save_config(config)
+    ui.console.print()
+    ui.console.print(f"[green]Configuration saved![/green]")
+    ui.console.print()
+    ui.console.print("Run [bold]sc2 scan[/bold] to import your replays!")
+    ui.console.print()
+
+    return True
+
+
+def ensure_config():
+    """Ensure config exists, running setup if needed."""
+    if not config_exists():
+        if not run_setup_wizard():
+            sys.exit(1)
+
+
+def cmd_config(args):
+    """Run setup wizard to configure or reconfigure."""
+    run_setup_wizard()
+
+
 def cmd_scan(args):
     """Scan replay folder and add new replays to database."""
+    ensure_config()
     db.init_db()
 
-    replays = find_replays(REPLAY_FOLDER)
+    replay_folder = get_replay_folder()
+    player_name = get_player_name()
+
+    replays = find_replays(replay_folder)
     if not replays:
-        ui.console.print(f"[yellow]No replays found in:[/yellow] {REPLAY_FOLDER}")
+        ui.console.print(f"[yellow]No replays found in:[/yellow] {replay_folder}")
         return
 
-    ui.console.print(f"[cyan]Scanning {len(replays)} replay(s) in:[/cyan] {REPLAY_FOLDER}")
-    ui.console.print(f"[cyan]Player:[/cyan] {PLAYER_NAME}")
+    ui.console.print(f"[cyan]Scanning {len(replays)} replay(s) in:[/cyan] {replay_folder}")
+    ui.console.print(f"[cyan]Player:[/cyan] {player_name}")
     ui.console.print()
 
     new_count = 0
@@ -61,7 +172,7 @@ def cmd_scan(args):
             continue
 
         try:
-            data = parse_replay(str(replay_path))
+            data = parse_replay(str(replay_path), player_name)
             if data:
                 db.insert_replay(data)
                 new_count += 1
@@ -83,6 +194,7 @@ def cmd_scan(args):
 
 def cmd_show(args):
     """Show replays with optional filtering."""
+    ensure_config()
     db.init_db()
 
     replays = db.get_replays(
@@ -94,10 +206,12 @@ def cmd_show(args):
     )
 
     ui.show_replays_table(replays)
+    ui.show_summary_row(replays)
 
 
 def cmd_latest(args):
     """Show detailed stats for the most recent game."""
+    ensure_config()
     db.init_db()
 
     replay = db.get_latest_replay()
@@ -106,6 +220,7 @@ def cmd_latest(args):
 
 def cmd_stats(args):
     """Show aggregate statistics."""
+    ensure_config()
     db.init_db()
 
     stats = db.get_stats(matchup=args.matchup, days=args.days)
@@ -116,6 +231,7 @@ def cmd_stats(args):
 
 def cmd_export(args):
     """Export replays to CSV."""
+    ensure_config()
     db.init_db()
 
     replays = db.get_replays(
@@ -141,6 +257,7 @@ def cmd_export(args):
 
 def cmd_live(args):
     """Run interactive filtering mode."""
+    ensure_config()
     ui.run_interactive_mode()
 
 
@@ -150,6 +267,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # config command
+    config_parser = subparsers.add_parser("config", help="Configure or reconfigure settings")
+    config_parser.set_defaults(func=cmd_config)
 
     # scan command
     scan_parser = subparsers.add_parser("scan", help="Scan replay folder for new games")
@@ -191,9 +312,17 @@ def main():
 
     args = parser.parse_args()
 
+    # Default behavior: show games if config exists, else run setup
     if not args.command:
-        parser.print_help()
-        sys.exit(1)
+        if config_exists():
+            # Show recent games by default
+            db.init_db()
+            replays = db.get_replays(limit=20)
+            ui.show_replays_table(replays)
+            ui.show_summary_row(replays)
+        else:
+            run_setup_wizard()
+        return
 
     args.func(args)
 

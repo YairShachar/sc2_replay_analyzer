@@ -7,7 +7,7 @@ import sqlite3
 from contextlib import contextmanager
 from typing import Optional
 
-from config import DB_PATH, ensure_db_dir
+from .config import get_db_path, ensure_config_dir
 
 
 SCHEMA = """
@@ -58,7 +58,7 @@ CREATE INDEX IF NOT EXISTS idx_map_name ON replays(map_name);
 
 def init_db():
     """Initialize the database and create tables if needed."""
-    ensure_db_dir()
+    ensure_config_dir()
     with get_connection() as conn:
         conn.executescript(SCHEMA)
 
@@ -66,7 +66,7 @@ def init_db():
 @contextmanager
 def get_connection():
     """Context manager for database connections."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(str(get_db_path()))
     conn.row_factory = sqlite3.Row
     try:
         yield conn

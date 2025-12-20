@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import sc2reader
 from sc2reader.events import tracker as tr
 
-from config import PLAYER_NAME, WORKERS, TOWNHALLS, SNAPSHOTS
+from .config import get_player_name, WORKERS, TOWNHALLS
 
 
 def sha1(path: str) -> str:
@@ -88,22 +88,25 @@ def army_value_at(units: dict, pid: int, t: int) -> tuple:
     return minerals, gas
 
 
-def parse_replay(replay_path: str) -> dict:
+def parse_replay(replay_path: str, player_name: str = None) -> dict:
     """
     Parse a single replay file and return extracted data.
 
     Returns a dictionary with all game metrics, ready for database insertion.
     Returns None if the player is not found in the replay.
     """
+    if player_name is None:
+        player_name = get_player_name()
+
     r = sc2reader.load_replay(replay_path, load_level=4)
     replay_id = sha1(replay_path)
 
     # Find the player
-    me = next((p for p in r.players if p.name == PLAYER_NAME), None)
+    me = next((p for p in r.players if p.name == player_name), None)
     if me is None:
         return None
 
-    opp = next((p for p in r.players if p.name != PLAYER_NAME), None)
+    opp = next((p for p in r.players if p.name != player_name), None)
     if opp is None:
         return None
 

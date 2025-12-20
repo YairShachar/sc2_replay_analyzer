@@ -3,7 +3,9 @@ SC2 Replay Analyzer UI
 
 Terminal UI using Rich library for formatted tables and output.
 """
+from dataclasses import dataclass
 from datetime import datetime
+import re
 from typing import Optional
 
 from rich.console import Console
@@ -11,11 +13,11 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 
-from config import (
-    BENCHMARK_WORKERS_6M,
-    BENCHMARK_WORKERS_8M,
+from .config import (
+    get_benchmark_workers_6m,
+    get_benchmark_workers_8m,
+    get_display_columns,
     AVAILABLE_COLUMNS,
-    DISPLAY_COLUMNS,
 )
 
 console = Console()
@@ -94,6 +96,9 @@ def format_mmr(player_mmr: Optional[int], opponent_mmr: Optional[int]) -> Text:
 
 def get_column_value(col_key: str, r: dict):
     """Get formatted value for a column key from a replay dict."""
+    benchmark_6m = get_benchmark_workers_6m()
+    benchmark_8m = get_benchmark_workers_8m()
+
     renderers = {
         "date": lambda: format_date(r.get("played_at")),
         "map": lambda: (r.get("map_name") or "-")[:14],
@@ -103,8 +108,8 @@ def get_column_value(col_key: str, r: dict):
         "opponent_mmr": lambda: str(r.get("opponent_mmr") or "-"),
         "apm": lambda: str(r.get("player_apm") or "-"),
         "opponent_apm": lambda: str(r.get("opponent_apm") or "-"),
-        "workers_6m": lambda: format_workers(r.get("workers_6m"), BENCHMARK_WORKERS_6M),
-        "workers_8m": lambda: format_workers(r.get("workers_8m"), BENCHMARK_WORKERS_8M),
+        "workers_6m": lambda: format_workers(r.get("workers_6m"), benchmark_6m),
+        "workers_8m": lambda: format_workers(r.get("workers_8m"), benchmark_8m),
         "workers_10m": lambda: str(r.get("workers_10m") or "-"),
         "army": lambda: format_army(r.get("army_supply_8m"), r.get("army_minerals_8m")),
         "length": lambda: format_duration(r.get("game_length_sec")),
@@ -123,10 +128,11 @@ def show_replays_table(replays: list):
         console.print("[yellow]No replays found.[/yellow]")
         return
 
+    display_columns = get_display_columns()
     table = Table(title="Recent Games", show_header=True, header_style="bold cyan")
 
     # Add columns dynamically from config
-    for col_key in DISPLAY_COLUMNS:
+    for col_key in display_columns:
         if col_key in AVAILABLE_COLUMNS:
             header, width, justify = AVAILABLE_COLUMNS[col_key]
             style = "dim" if col_key == "date" else None
@@ -134,7 +140,7 @@ def show_replays_table(replays: list):
 
     # Add rows
     for r in replays:
-        row_values = [get_column_value(col_key, r) for col_key in DISPLAY_COLUMNS if col_key in AVAILABLE_COLUMNS]
+        row_values = [get_column_value(col_key, r) for col_key in display_columns if col_key in AVAILABLE_COLUMNS]
         table.add_row(*row_values)
 
     console.print(table)
@@ -145,6 +151,9 @@ def show_latest_game(replay: dict):
     if not replay:
         console.print("[yellow]No replays found.[/yellow]")
         return
+
+    benchmark_6m = get_benchmark_workers_6m()
+    benchmark_8m = get_benchmark_workers_8m()
 
     result_style = "green" if replay.get("result", "").lower() == "win" else "red"
 
@@ -176,8 +185,8 @@ def show_latest_game(replay: dict):
     w8 = replay.get("workers_8m")
     w10 = replay.get("workers_10m")
 
-    w6_warning = " [red](!)[/red]" if w6 and w6 < BENCHMARK_WORKERS_6M else ""
-    w8_warning = " [red](!)[/red]" if w8 and w8 < BENCHMARK_WORKERS_8M else ""
+    w6_warning = " [red](!)[/red]" if w6 and w6 < benchmark_6m else ""
+    w8_warning = " [red](!)[/red]" if w8 and w8 < benchmark_8m else ""
 
     lines.append("[bold cyan]Workers:[/bold cyan]")
     lines.append(f"  @6m: {w6 or '-'}{w6_warning}")
@@ -344,10 +353,6 @@ def show_summary_row(replays: list):
 # ============================================================
 # INTERACTIVE MODE
 # ============================================================
-
-from dataclasses import dataclass, field
-import re
-
 
 @dataclass
 class FilterState:
@@ -547,7 +552,7 @@ def show_help():
 
 def run_interactive_mode():
     """Run the interactive filtering mode."""
-    import db
+    from . import db
 
     db.init_db()
     state = FilterState()
