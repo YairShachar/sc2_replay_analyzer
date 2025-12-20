@@ -5,10 +5,10 @@ SC2 Replay Analyzer CLI
 Analyze your StarCraft II replays with filtering, stats, and beautiful terminal output.
 
 Usage:
-    sc2                    # First run: setup. After: show recent games
-    sc2 scan               # Scan replay folder for new games
-    sc2 live               # Interactive filtering mode
+    sc2                    # Auto-scan for new replays, then interactive mode
+    sc2 show               # One-time query of recent games
     sc2 stats              # Show aggregate statistics
+    sc2 scan               # Full scan with progress display
     sc2 config             # Re-run setup / change settings
     sc2 export             # Export to CSV
 """
@@ -41,6 +41,35 @@ def find_replays(folder: str) -> list:
 
     replays = list(folder_path.glob("*.SC2Replay"))
     return sorted(replays, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def auto_scan() -> int:
+    """Automatically scan for new replays. Returns count of new replays found."""
+    replay_folder = get_replay_folder()
+    player_name = get_player_name()
+
+    folder_path = Path(replay_folder)
+    if not folder_path.exists():
+        return 0
+
+    replays = list(folder_path.glob("*.SC2Replay"))
+    new_count = 0
+
+    for replay_path in replays:
+        replay_id = sha1(str(replay_path))
+        if not db.replay_exists(replay_id):
+            try:
+                data = parse_replay(str(replay_path), player_name)
+                if data:
+                    db.insert_replay(data)
+                    new_count += 1
+            except Exception:
+                pass  # Silently skip errors during auto-scan
+
+    if new_count > 0:
+        ui.console.print(f"[green]Found {new_count} new replay(s)[/green]")
+
+    return new_count
 
 
 def run_setup_wizard() -> bool:
@@ -122,8 +151,6 @@ def run_setup_wizard() -> bool:
     save_config(config)
     ui.console.print()
     ui.console.print(f"[green]Configuration saved![/green]")
-    ui.console.print()
-    ui.console.print("Run [bold]sc2 scan[/bold] to import your replays!")
     ui.console.print()
 
     return True
@@ -258,6 +285,8 @@ def cmd_export(args):
 def cmd_live(args):
     """Run interactive filtering mode."""
     ensure_config()
+    db.init_db()
+    auto_scan()
     ui.run_interactive_mode()
 
 
@@ -312,16 +341,14 @@ def main():
 
     args = parser.parse_args()
 
-    # Default behavior: show games if config exists, else run setup
+    # Default behavior: auto-scan and launch live mode
     if not args.command:
-        if config_exists():
-            # Show recent games by default
-            db.init_db()
-            replays = db.get_replays(limit=20)
-            ui.show_replays_table(replays)
-            ui.show_summary_row(replays)
-        else:
+        if not config_exists():
             run_setup_wizard()
+        ensure_config()
+        db.init_db()
+        auto_scan()
+        ui.run_interactive_mode()
         return
 
     args.func(args)
