@@ -37,3 +37,6 @@ build/
 
 # Local dev
 *.csv
+
+# Claude Code
+.claude/

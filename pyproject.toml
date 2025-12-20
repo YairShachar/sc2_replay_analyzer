@@ -10,7 +10,7 @@ readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.8"
 authors = [
-    {name = "Yair Shachar", email = "yair@example.com"}
+    {name = "Yair Shachar"}
 ]
 keywords = ["starcraft", "sc2", "replay", "analyzer", "esports", "gaming"]
 classifiers = [
