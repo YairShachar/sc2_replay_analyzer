@@ -17,6 +17,9 @@ from .config import (
     get_benchmark_workers_6m,
     get_benchmark_workers_8m,
     get_display_columns,
+    add_display_columns,
+    remove_display_columns,
+    reset_display_columns,
     AVAILABLE_COLUMNS,
 )
 
@@ -115,6 +118,7 @@ def get_column_value(col_key: str, r: dict):
         "length": lambda: format_duration(r.get("game_length_sec")),
         "bases_6m": lambda: str(r.get("bases_by_6m") or "-"),
         "bases_8m": lambda: str(r.get("bases_by_8m") or "-"),
+        "bases_10m": lambda: str(r.get("bases_by_10m") or "-"),
         "worker_kills": lambda: str(r.get("worker_kills_8m") or "0"),
         "worker_losses": lambda: str(r.get("worker_losses_8m") or "0"),
     }
@@ -525,13 +529,60 @@ def parse_filter_command(cmd: str, state: FilterState) -> tuple:
         state.days = int(match.group(1))
         return state, None
 
+    # Parse columns commands
+    if cmd.lower() == 'columns':
+        return state, "COLUMNS"
+
+    match = re.match(r'columns\s+add\s+(.+)', cmd, re.IGNORECASE)
+    if match:
+        cols = match.group(1).split()
+        added = add_display_columns(cols)
+        if added:
+            console.print(f"[green]Added:[/green] {', '.join(added)}")
+        else:
+            console.print("[yellow]No columns added (already present or invalid)[/yellow]")
+        return state, None
+
+    match = re.match(r'columns\s+remove\s+(.+)', cmd, re.IGNORECASE)
+    if match:
+        cols = match.group(1).split()
+        removed = remove_display_columns(cols)
+        if removed:
+            console.print(f"[green]Removed:[/green] {', '.join(removed)}")
+        else:
+            console.print("[yellow]No columns removed (not present)[/yellow]")
+        return state, None
+
+    if cmd.lower() == 'columns reset':
+        reset_display_columns()
+        console.print("[green]Columns reset to defaults[/green]")
+        return state, None
+
     return state, f"Unknown command: {cmd}"
+
+
+def show_columns():
+    """Display available columns with current selection."""
+    current_columns = get_display_columns()
+    console.print()
+    console.print("[bold cyan]Available columns:[/bold cyan]")
+    console.print("[dim](* = currently shown)[/dim]")
+    console.print()
+
+    for key, (header, width, justify) in AVAILABLE_COLUMNS.items():
+        marker = "[green]*[/green]" if key in current_columns else " "
+        console.print(f"  {marker} [bold]{key:15}[/bold] {header:10}")
+
+    console.print()
+    console.print(f"[dim]Current: {', '.join(current_columns)}[/dim]")
+    console.print()
+    console.print("[dim]Use 'columns add <col>' or 'columns remove <col>' to modify[/dim]")
 
 
 def show_help():
     """Display help for interactive mode commands."""
     help_text = """
-[bold cyan]Available Commands:[/bold cyan]
+[bold cyan]Filter Commands:[/bold cyan]
 
   [green]-n <num>[/green]      Limit to N games         [dim]e.g. -n 50[/dim]
   [green]-m <matchup>[/green]  Filter by matchup        [dim]e.g. -m TvZ[/dim]
@@ -540,6 +591,15 @@ def show_help():
   [green]-w <op><num>[/green]  Filter by workers @8m    [dim]e.g. -w <=40, -w >50[/dim]
   [green]--map <name>[/green]  Filter by map name       [dim]e.g. --map Pylon[/dim]
   [green]-d <days>[/green]     Games from last N days   [dim]e.g. -d 7[/dim]
+
+[bold cyan]Column Commands:[/bold cyan]
+
+  [green]columns[/green]             List available columns
+  [green]columns add <col>[/green]   Add column(s)         [dim]e.g. columns add bases_6m bases_8m[/dim]
+  [green]columns remove <col>[/green] Remove column(s)     [dim]e.g. columns remove mmr[/dim]
+  [green]columns reset[/green]       Reset to defaults
+
+[bold cyan]Other:[/bold cyan]
 
   [yellow]clear[/yellow]        Reset all filters
   [yellow]help[/yellow]         Show this help
@@ -609,6 +669,9 @@ def run_interactive_mode():
         if error == "HELP":
             show_help()
             need_refresh = False  # Stay on current view after help
+        elif error == "COLUMNS":
+            show_columns()
+            need_refresh = False  # Stay on current view after columns
         elif error:
             console.print(f"[red]{error}[/red]")
             console.print("[dim]Type 'help' for available commands.[/dim]")

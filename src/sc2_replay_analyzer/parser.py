@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import sc2reader
 from sc2reader.events import tracker as tr
 
-from .config import get_player_name, WORKERS, TOWNHALLS
+from .config import get_player_name, WORKERS, TOWNHALLS, SNAPSHOTS
 
 
 def sha1(path: str) -> str:
@@ -155,13 +155,14 @@ def parse_replay(replay_path: str, player_name: str = None) -> dict:
         "opponent_apm": opponent_apm,
 
         # Workers at snapshots
-        "workers_6m": alive_at(units, me.pid, WORKERS, 360) if game_length >= 360 else None,
-        "workers_8m": alive_at(units, me.pid, WORKERS, 480) if game_length >= 480 else None,
-        "workers_10m": alive_at(units, me.pid, WORKERS, 600) if game_length >= 600 else None,
+        "workers_6m": alive_at(units, me.pid, WORKERS, SNAPSHOTS["6m"]) if game_length >= SNAPSHOTS["6m"] else None,
+        "workers_8m": alive_at(units, me.pid, WORKERS, SNAPSHOTS["8m"]) if game_length >= SNAPSHOTS["8m"] else None,
+        "workers_10m": alive_at(units, me.pid, WORKERS, SNAPSHOTS["10m"]) if game_length >= SNAPSHOTS["10m"] else None,
 
         # Bases
-        "bases_by_6m": alive_at(units, me.pid, TOWNHALLS, 360) if game_length >= 360 else None,
-        "bases_by_8m": alive_at(units, me.pid, TOWNHALLS, 480) if game_length >= 480 else None,
+        "bases_by_6m": alive_at(units, me.pid, TOWNHALLS, SNAPSHOTS["6m"]) if game_length >= SNAPSHOTS["6m"] else None,
+        "bases_by_8m": alive_at(units, me.pid, TOWNHALLS, SNAPSHOTS["8m"]) if game_length >= SNAPSHOTS["8m"] else None,
+        "bases_by_10m": alive_at(units, me.pid, TOWNHALLS, SNAPSHOTS["10m"]) if game_length >= SNAPSHOTS["10m"] else None,
     }
 
     # Base timings
@@ -173,9 +174,9 @@ def parse_replay(replay_path: str, player_name: str = None) -> dict:
     data["third_timing"] = townhall_times[2] if len(townhall_times) > 2 else None
 
     # Army at 8m
-    if game_length >= 480:
-        data["army_supply_8m"] = army_supply_at(units, me.pid, 480)
-        minerals_8m, gas_8m = army_value_at(units, me.pid, 480)
+    if game_length >= SNAPSHOTS["8m"]:
+        data["army_supply_8m"] = army_supply_at(units, me.pid, SNAPSHOTS["8m"])
+        minerals_8m, gas_8m = army_value_at(units, me.pid, SNAPSHOTS["8m"])
         data["army_minerals_8m"] = minerals_8m
         data["army_gas_8m"] = gas_8m
     else:
@@ -186,7 +187,7 @@ def parse_replay(replay_path: str, player_name: str = None) -> dict:
     # Worker kills/losses in first 8 minutes
     kills = losses = 0
     for e in r.tracker_events:
-        if isinstance(e, tr.UnitDiedEvent) and e.second <= 480:
+        if isinstance(e, tr.UnitDiedEvent) and e.second <= SNAPSHOTS["8m"]:
             unit_name = e.unit.name if e.unit else None
             if unit_name in WORKERS:
                 if e.killer_pid == me.pid:

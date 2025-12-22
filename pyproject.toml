@@ -41,5 +41,17 @@ Issues = "https://github.com/YairShachar/sc2_replay_analyzer/issues"
 [project.scripts]
 sc2 = "sc2_replay_analyzer.cli:main"
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"

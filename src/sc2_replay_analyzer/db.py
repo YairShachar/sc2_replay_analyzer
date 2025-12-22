@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS replays (
     -- Base metrics
     bases_by_6m INTEGER,
     bases_by_8m INTEGER,
+    bases_by_10m INTEGER,
     natural_timing INTEGER,
     third_timing INTEGER,
 
@@ -61,6 +62,18 @@ def init_db():
     ensure_config_dir()
     with get_connection() as conn:
         conn.executescript(SCHEMA)
+        # Migrations: add columns that may be missing from older databases
+        _migrate_add_column(conn, "bases_by_6m", "INTEGER")
+        _migrate_add_column(conn, "bases_by_8m", "INTEGER")
+        _migrate_add_column(conn, "bases_by_10m", "INTEGER")
+
+
+def _migrate_add_column(conn, column_name: str, column_type: str):
+    """Add a column to replays table if it doesn't exist."""
+    cursor = conn.execute("PRAGMA table_info(replays)")
+    existing_columns = {row[1] for row in cursor.fetchall()}
+    if column_name not in existing_columns:
+        conn.execute(f"ALTER TABLE replays ADD COLUMN {column_name} {column_type}")
 
 
 @contextmanager

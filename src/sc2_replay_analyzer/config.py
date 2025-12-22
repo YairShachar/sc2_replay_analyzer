@@ -3,6 +3,7 @@ SC2 Replay Analyzer Configuration
 
 Handles loading/saving user config and auto-detection of SC2 paths.
 """
+import copy
 import os
 import sys
 from pathlib import Path
@@ -79,11 +80,16 @@ TOWNHALLS = {
     "Nexus",
 }
 
-# Time snapshots for metrics (in seconds)
+# Game speed factor: SC2 "Faster" speed runs at 1.4x real-time
+# sc2reader returns game-time seconds, so we multiply real-time by this factor
+GAME_SPEED_FACTOR = 1.4
+
+# Time snapshots for metrics (in game-time seconds)
+# These represent when the in-game timer shows 6:00, 8:00, 10:00
 SNAPSHOTS = {
-    "6m": 360,
-    "8m": 480,
-    "10m": 600,
+    "6m": int(360 * GAME_SPEED_FACTOR),   # 504 game seconds
+    "8m": int(480 * GAME_SPEED_FACTOR),   # 672 game seconds
+    "10m": int(600 * GAME_SPEED_FACTOR),  # 840 game seconds
 }
 
 # Available columns for display
@@ -103,6 +109,7 @@ AVAILABLE_COLUMNS = {
     "length": ("Length", 7, "right"),
     "bases_6m": ("B@6m", 5, "right"),
     "bases_8m": ("B@8m", 5, "right"),
+    "bases_10m": ("B@10m", 6, "right"),
     "worker_kills": ("Kills", 5, "right"),
     "worker_losses": ("Deaths", 6, "right"),
 }
@@ -122,7 +129,7 @@ def load_config() -> dict:
     if _config_cache is not None:
         return _config_cache
 
-    config = DEFAULT_CONFIG.copy()
+    config = copy.deepcopy(DEFAULT_CONFIG)
 
     if config_exists():
         with open(get_config_path(), "rb") as f:
@@ -190,6 +197,45 @@ def get_display_columns() -> list:
     return load_config()["display"]["columns"]
 
 
+def set_display_columns(columns: list):
+    """Set the list of columns to display and save to config."""
+    config = load_config()
+    config["display"]["columns"] = columns
+    save_config(config)
+    clear_config_cache()
+
+
+def add_display_columns(columns: list) -> list:
+    """Add columns to display. Returns list of actually added columns."""
+    current = get_display_columns()
+    added = []
+    for col in columns:
+        if col in AVAILABLE_COLUMNS and col not in current:
+            current.append(col)
+            added.append(col)
+    if added:
+        set_display_columns(current)
+    return added
+
+
+def remove_display_columns(columns: list) -> list:
+    """Remove columns from display. Returns list of actually removed columns."""
+    current = get_display_columns()
+    removed = []
+    for col in columns:
+        if col in current:
+            current.remove(col)
+            removed.append(col)
+    if removed:
+        set_display_columns(current)
+    return removed
+
+
+def reset_display_columns():
+    """Reset columns to defaults."""
+    set_display_columns(DEFAULT_CONFIG["display"]["columns"].copy())
+
+
 # ============================================================
 # AUTO-DETECTION
 # ============================================================
@@ -246,33 +292,53 @@ def find_replay_folders() -> list:
     return candidates
 
 
-def validate_player_name(player_name: str, replay_folder: str, max_replays: int = 10) -> tuple:
+def find_matching_players(search_term: str, replay_folder: str, max_replays: int = 10) -> tuple:
     """
-    Validate that a player name exists in replays.
+    Find player names in replays that match the search term.
 
-    Returns (found_count, total_checked) tuple.
+    Matching is case-insensitive and uses 'contains' logic.
+
+    Returns (matching_names, total_checked) tuple where matching_names is a dict
+    mapping exact player names to their occurrence count.
     """
     import sc2reader
 
     folder = Path(replay_folder)
     if not folder.exists():
-        return (0, 0)
+        return ({}, 0)
 
     replays = sorted(folder.glob("*.SC2Replay"), key=lambda p: p.stat().st_mtime, reverse=True)
     replays = replays[:max_replays]
 
-    found = 0
+    matches = {}  # player_name -> count
     checked = 0
+    search_lower = search_term.lower()
 
     for replay_path in replays:
         try:
-            r = sc2reader.load_replay(str(replay_path), load_level=1)
+            r = sc2reader.load_replay(str(replay_path), load_level=2)
             checked += 1
             for p in r.players:
-                if p.name == player_name:
-                    found += 1
-                    break
+                if search_lower in p.name.lower():
+                    matches[p.name] = matches.get(p.name, 0) + 1
         except Exception:
             continue
+
+    return (matches, checked)
+
+
+def validate_player_name(player_name: str, replay_folder: str, max_replays: int = 10) -> tuple:
+    """
+    Validate that a player name exists in replays (exact match).
+
+    Returns (found_count, total_checked) tuple.
+    """
+    matches, checked = find_matching_players(player_name, replay_folder, max_replays)
+
+    # Count exact matches (case-insensitive)
+    found = 0
+    for name, count in matches.items():
+        if name.lower() == player_name.lower():
+            found += count
 
     return (found, checked)

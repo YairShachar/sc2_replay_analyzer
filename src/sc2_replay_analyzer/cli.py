@@ -23,10 +23,17 @@ from .config import (
     load_config,
     save_config,
     find_replay_folders,
+    find_matching_players,
     validate_player_name,
     get_player_name,
     get_replay_folder,
+    get_display_columns,
+    set_display_columns,
+    add_display_columns,
+    remove_display_columns,
+    reset_display_columns,
     DEFAULT_CONFIG,
+    AVAILABLE_COLUMNS,
 )
 from .parser import parse_replay, sha1
 from . import ui
@@ -125,25 +132,50 @@ def run_setup_wizard() -> bool:
     ui.console.print()
 
     # Step 2: Get player name
-    player_name = ui.console.input("Enter your SC2 player name: ").strip()
-    if not player_name:
+    search_name = ui.console.input("Enter your SC2 player name: ").strip()
+    if not search_name:
         ui.console.print("[red]Player name cannot be empty.[/red]")
         return False
 
-    # Step 3: Validate player name
+    # Step 3: Find matching player names
     ui.console.print()
-    ui.console.print("[bold]Validating player name...[/bold]")
-    found, checked = validate_player_name(player_name, replay_folder)
+    ui.console.print("[bold]Searching for player name...[/bold]")
+    matches, checked = find_matching_players(search_name, replay_folder)
 
-    if found > 0:
-        ui.console.print(f"[green]Found {found} games as \"{player_name}\"[/green]")
-    elif checked > 0:
-        ui.console.print(f"[yellow]Warning: Player \"{player_name}\" not found in {checked} recent replays.[/yellow]")
-        confirm = ui.console.input("Continue anyway? [y/N]: ").strip().lower()
-        if confirm not in ('y', 'yes'):
-            return False
+    if not matches:
+        if checked > 0:
+            ui.console.print(f"[yellow]Warning: No player matching \"{search_name}\" found in {checked} recent replays.[/yellow]")
+            confirm = ui.console.input("Continue anyway? [y/N]: ").strip().lower()
+            if confirm not in ('y', 'yes'):
+                return False
+            player_name = search_name
+        else:
+            ui.console.print("[yellow]Could not validate player name (no replays found).[/yellow]")
+            player_name = search_name
+    elif len(matches) == 1:
+        # Exactly one match
+        player_name = list(matches.keys())[0]
+        count = matches[player_name]
+        ui.console.print(f"[green]Found \"{player_name}\" in {count}/{checked} recent replays[/green]")
     else:
-        ui.console.print("[yellow]Could not validate player name (no replays found).[/yellow]")
+        # Multiple matches - let user choose
+        ui.console.print(f"[green]Found multiple matching players:[/green]")
+        sorted_matches = sorted(matches.items(), key=lambda x: -x[1])  # Sort by count desc
+        for i, (name, count) in enumerate(sorted_matches, 1):
+            ui.console.print(f"  {i}. {name} ({count} games)")
+        ui.console.print()
+        choice = ui.console.input(f"Choose player [1-{len(sorted_matches)}]: ").strip()
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(sorted_matches):
+                player_name = sorted_matches[idx][0]
+                ui.console.print(f"[green]Selected: {player_name}[/green]")
+            else:
+                ui.console.print("[red]Invalid choice.[/red]")
+                return False
+        except ValueError:
+            ui.console.print("[red]Invalid choice.[/red]")
+            return False
 
     config["player_name"] = player_name
 
@@ -290,6 +322,64 @@ def cmd_live(args):
     ui.run_interactive_mode()
 
 
+def cmd_columns(args):
+    """Manage display columns."""
+    ensure_config()
+
+    current_columns = get_display_columns()
+
+    if args.action == "list" or args.action is None:
+        # Show available columns with current selection marked
+        ui.console.print()
+        ui.console.print("[bold cyan]Available columns:[/bold cyan]")
+        ui.console.print("[dim](* = currently shown)[/dim]")
+        ui.console.print()
+
+        for key, (header, width, justify) in AVAILABLE_COLUMNS.items():
+            marker = "[green]*[/green]" if key in current_columns else " "
+            ui.console.print(f"  {marker} [bold]{key:15}[/bold] {header:10}")
+
+        ui.console.print()
+        ui.console.print(f"[dim]Current: {', '.join(current_columns)}[/dim]")
+
+    elif args.action == "add":
+        if not args.columns:
+            ui.console.print("[red]Usage: sc2 columns add <column> [column...][/red]")
+            return
+        added = add_display_columns(args.columns)
+        if added:
+            ui.console.print(f"[green]Added:[/green] {', '.join(added)}")
+        else:
+            ui.console.print("[yellow]No columns added (already present or invalid)[/yellow]")
+
+    elif args.action == "remove":
+        if not args.columns:
+            ui.console.print("[red]Usage: sc2 columns remove <column> [column...][/red]")
+            return
+        removed = remove_display_columns(args.columns)
+        if removed:
+            ui.console.print(f"[green]Removed:[/green] {', '.join(removed)}")
+        else:
+            ui.console.print("[yellow]No columns removed (not present)[/yellow]")
+
+    elif args.action == "set":
+        if not args.columns:
+            ui.console.print("[red]Usage: sc2 columns set <column> [column...][/red]")
+            return
+        # Validate all columns
+        invalid = [c for c in args.columns if c not in AVAILABLE_COLUMNS]
+        if invalid:
+            ui.console.print(f"[red]Invalid columns:[/red] {', '.join(invalid)}")
+            ui.console.print(f"[dim]Available: {', '.join(AVAILABLE_COLUMNS.keys())}[/dim]")
+            return
+        set_display_columns(args.columns)
+        ui.console.print(f"[green]Columns set to:[/green] {', '.join(args.columns)}")
+
+    elif args.action == "reset":
+        reset_display_columns()
+        ui.console.print("[green]Columns reset to defaults[/green]")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="SC2 Replay Analyzer - Track your StarCraft II progress",
@@ -338,6 +428,22 @@ def main():
     # live command
     live_parser = subparsers.add_parser("live", help="Interactive filtering mode")
     live_parser.set_defaults(func=cmd_live)
+
+    # columns command
+    columns_parser = subparsers.add_parser("columns", help="Manage display columns")
+    columns_parser.add_argument(
+        "action",
+        nargs="?",
+        choices=["list", "add", "remove", "set", "reset"],
+        default="list",
+        help="Action to perform (default: list)",
+    )
+    columns_parser.add_argument(
+        "columns",
+        nargs="*",
+        help="Column names (for add/remove/set)",
+    )
+    columns_parser.set_defaults(func=cmd_columns)
 
     args = parser.parse_args()
 
