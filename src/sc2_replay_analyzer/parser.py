@@ -146,6 +146,7 @@ def parse_replay(replay_path: str, player_name: str = None) -> dict:
         "map_name": r.map_name,
         "player_race": me.play_race,
         "opponent_race": opp.play_race,
+        "opponent_name": opp.name,
         "matchup": matchup,
         "result": me.result,
         "game_length_sec": game_length,

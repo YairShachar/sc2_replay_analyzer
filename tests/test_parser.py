@@ -331,3 +331,4 @@ class TestParseReplay:
         assert result["result"] == "Win"
         assert result["player_race"] == "Terran"
         assert result["opponent_race"] == "Zerg"
+        assert result["opponent_name"] == "Opponent"

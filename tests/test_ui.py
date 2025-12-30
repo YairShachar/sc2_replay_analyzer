@@ -332,6 +332,139 @@ class TestParseFilterCommand:
         assert error is None
         assert state.days == 7
 
+    def test_conflicting_length_filters_overwrite_max(self):
+        """Conflicting min length filter clears max when min > max."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        # First set max length to 10 minutes (600 seconds)
+        state, _ = parse_filter_command("-l <10:00", state)
+        assert state.max_length == 600
+        assert state.min_length is None
+
+        # Then set conflicting min length to 15 minutes (900 seconds)
+        # Since 900 > 600, max should be cleared
+        state, _ = parse_filter_command("-l >15:00", state)
+        assert state.min_length == 900
+        assert state.max_length is None
+
+    def test_conflicting_length_filters_overwrite_min(self):
+        """Conflicting max length filter clears min when max < min."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        # First set min length to 10 minutes (600 seconds)
+        state, _ = parse_filter_command("-l >10:00", state)
+        assert state.min_length == 600
+        assert state.max_length is None
+
+        # Then set conflicting max length to 5 minutes (300 seconds)
+        # Since 300 < 600, min should be cleared
+        state, _ = parse_filter_command("-l <5:00", state)
+        assert state.max_length == 300
+        assert state.min_length is None
+
+    def test_non_conflicting_length_filters_stack(self):
+        """Non-conflicting length filters stack (create valid range)."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        # Set min length to 5 minutes (300 seconds)
+        state, _ = parse_filter_command("-l >5:00", state)
+        # Set max length to 10 minutes (600 seconds) - valid range
+        state, _ = parse_filter_command("-l <10:00", state)
+
+        assert state.min_length == 300
+        assert state.max_length == 600
+
+    def test_conflicting_workers_filters_overwrite_max(self):
+        """Conflicting min workers filter clears max when min > max."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        # First set max workers to 40
+        state, _ = parse_filter_command("-w <40", state)
+        assert state.max_workers_8m == 40
+        assert state.min_workers_8m is None
+
+        # Then set conflicting min workers to 50
+        # Since 50 > 40, max should be cleared
+        state, _ = parse_filter_command("-w >50", state)
+        assert state.min_workers_8m == 50
+        assert state.max_workers_8m is None
+
+    def test_conflicting_workers_filters_overwrite_min(self):
+        """Conflicting max workers filter clears min when max < min."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        # First set min workers to 50
+        state, _ = parse_filter_command("-w >50", state)
+        assert state.min_workers_8m == 50
+        assert state.max_workers_8m is None
+
+        # Then set conflicting max workers to 40
+        # Since 40 < 50, min should be cleared
+        state, _ = parse_filter_command("-w <40", state)
+        assert state.max_workers_8m == 40
+        assert state.min_workers_8m is None
+
+    def test_non_conflicting_workers_filters_stack(self):
+        """Non-conflicting workers filters stack (create valid range)."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        # Set min workers to 30
+        state, _ = parse_filter_command("-w >30", state)
+        # Set max workers to 50 - valid range
+        state, _ = parse_filter_command("-w <50", state)
+
+        assert state.min_workers_8m == 30
+        assert state.max_workers_8m == 50
+
+    def test_parse_s_command_win_streak(self):
+        """parse_filter_command sets win streak filter with -s win:3+."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        state, error = parse_filter_command("-s win:3+", state)
+
+        assert error is None
+        assert state.streak_type == "win"
+        assert state.min_streak_length == 3
+
+    def test_parse_s_command_loss_streak(self):
+        """parse_filter_command sets loss streak filter with -s loss:5+."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        state, error = parse_filter_command("-s loss:5+", state)
+
+        assert error is None
+        assert state.streak_type == "loss"
+        assert state.min_streak_length == 5
+
+    def test_parse_s_command_case_insensitive(self):
+        """parse_filter_command handles case-insensitive streak type."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        state, error = parse_filter_command("-s WIN:3+", state)
+
+        assert error is None
+        assert state.streak_type == "win"
+
+    def test_parse_s_command_without_plus(self):
+        """parse_filter_command handles streak without trailing plus."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        state, error = parse_filter_command("-s win:3", state)
+
+        assert error is None
+        assert state.streak_type == "win"
+        assert state.min_streak_length == 3
+
     def test_parse_unknown_command(self):
         """parse_filter_command returns error for unknown commands."""
         from sc2_replay_analyzer.ui import parse_filter_command, FilterState
@@ -574,3 +707,210 @@ class TestFormatMmr:
         result = format_mmr(4400, 4500)
         assert "4400" in result.plain
         assert "-100" in result.plain
+
+
+class TestPrevNextGamesCommands:
+    """Tests for +p and +n commands (previous/next games)."""
+
+    def test_parse_plus_p_command(self):
+        """parse_filter_command sets prev_games with +p."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        state, error = parse_filter_command("+p 1", state)
+
+        assert error is None
+        assert state.prev_games == 1
+
+    def test_parse_plus_n_command(self):
+        """parse_filter_command sets next_games with +n."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        state, error = parse_filter_command("+n 2", state)
+
+        assert error is None
+        assert state.next_games == 2
+
+    def test_parse_plus_p_larger_value(self):
+        """parse_filter_command handles larger prev_games value."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        state, error = parse_filter_command("+p 10", state)
+
+        assert error is None
+        assert state.prev_games == 10
+
+    def test_parse_plus_n_larger_value(self):
+        """parse_filter_command handles larger next_games value."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        state, error = parse_filter_command("+n 5", state)
+
+        assert error is None
+        assert state.next_games == 5
+
+    def test_filter_state_defaults_prev_next_to_zero(self):
+        """FilterState defaults prev_games and next_games to 0."""
+        from sc2_replay_analyzer.ui import FilterState
+
+        state = FilterState()
+        assert state.prev_games == 0
+        assert state.next_games == 0
+
+    def test_filter_state_reset_clears_prev_next(self):
+        """FilterState.reset clears prev_games and next_games."""
+        from sc2_replay_analyzer.ui import FilterState
+
+        state = FilterState()
+        state.prev_games = 3
+        state.next_games = 2
+
+        state.reset()
+
+        assert state.prev_games == 0
+        assert state.next_games == 0
+
+    def test_filter_state_describe_with_prev_games(self):
+        """FilterState.describe includes prev_games."""
+        from sc2_replay_analyzer.ui import FilterState
+
+        state = FilterState()
+        state.prev_games = 2
+        desc = state.describe(5)
+        assert "+2 prev" in desc
+
+    def test_filter_state_describe_with_next_games(self):
+        """FilterState.describe includes next_games."""
+        from sc2_replay_analyzer.ui import FilterState
+
+        state = FilterState()
+        state.next_games = 3
+        desc = state.describe(5)
+        assert "+3 next" in desc
+
+    def test_filter_state_describe_with_both_prev_next(self):
+        """FilterState.describe includes both prev and next games."""
+        from sc2_replay_analyzer.ui import FilterState
+
+        state = FilterState()
+        state.prev_games = 1
+        state.next_games = 2
+        desc = state.describe(5)
+        assert "+1 prev" in desc
+        assert "+2 next" in desc
+
+    def test_plus_p_cumulative(self):
+        """Multiple +p commands accumulate."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        state, _ = parse_filter_command("+p 1", state)
+        state, _ = parse_filter_command("+p 1", state)
+        assert state.prev_games == 2
+
+    def test_plus_n_cumulative(self):
+        """Multiple +n commands accumulate."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        state, _ = parse_filter_command("+n 2", state)
+        state, _ = parse_filter_command("+n 3", state)
+        assert state.next_games == 5
+
+    def test_parse_prev_long_alias(self):
+        """--prev long alias works."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        state, error = parse_filter_command("--prev 2", state)
+
+        assert error is None
+        assert state.prev_games == 2
+
+    def test_parse_next_long_alias(self):
+        """--next long alias works."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        state, error = parse_filter_command("--next 3", state)
+
+        assert error is None
+        assert state.next_games == 3
+
+
+class TestLongAliases:
+    """Tests for long command aliases."""
+
+    def test_parse_matchup_long_alias(self):
+        """--matchup long alias works."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        state, error = parse_filter_command("--matchup TvZ", state)
+
+        assert error is None
+        assert state.matchup == "TvZ"
+
+    def test_parse_result_long_alias(self):
+        """--result long alias works."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        state, error = parse_filter_command("--result W", state)
+
+        assert error is None
+        assert state.result == "Win"
+
+    def test_parse_length_long_alias(self):
+        """--length long alias works."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        state, error = parse_filter_command("--length >8:00", state)
+
+        assert error is None
+        assert state.min_length == 480
+
+    def test_parse_workers_long_alias(self):
+        """--workers long alias works."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        state, error = parse_filter_command("--workers >50", state)
+
+        assert error is None
+        assert state.min_workers_8m == 50
+
+    def test_parse_days_long_alias(self):
+        """--days long alias works."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        state, error = parse_filter_command("--days 7", state)
+
+        assert error is None
+        assert state.days == 7
+
+    def test_parse_streaks_long_alias(self):
+        """--streaks long alias works."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        state, error = parse_filter_command("--streaks win:3+", state)
+
+        assert error is None
+        assert state.streak_type == "win"
+        assert state.min_streak_length == 3
+
+    def test_parse_limit_long_alias(self):
+        """--limit long alias works."""
+        from sc2_replay_analyzer.ui import parse_filter_command, FilterState
+
+        state = FilterState()
+        state, error = parse_filter_command("--limit 100", state)
+
+        assert error is None
+        assert state.limit == 100

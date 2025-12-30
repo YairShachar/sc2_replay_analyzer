@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS replays (
     opponent_mmr INTEGER,
     player_apm INTEGER,
     opponent_apm INTEGER,
+    opponent_name TEXT,
 
     -- Worker metrics
     workers_6m INTEGER,
@@ -66,6 +67,7 @@ def init_db():
         _migrate_add_column(conn, "bases_by_6m", "INTEGER")
         _migrate_add_column(conn, "bases_by_8m", "INTEGER")
         _migrate_add_column(conn, "bases_by_10m", "INTEGER")
+        _migrate_add_column(conn, "opponent_name", "TEXT")
 
 
 def _migrate_add_column(conn, column_name: str, column_type: str):
@@ -243,3 +245,137 @@ def get_replay_count() -> int:
     with get_connection() as conn:
         cursor = conn.execute("SELECT COUNT(*) FROM replays")
         return cursor.fetchone()[0]
+
+
+def get_streaks(
+    streak_type: str,
+    min_length: int = 3,
+    matchup: Optional[str] = None,
+    map_name: Optional[str] = None,
+    days: Optional[int] = None,
+) -> list:
+    """
+    Find streaks of consecutive wins or losses.
+
+    Args:
+        streak_type: "win" or "loss" - type of streak to find
+        min_length: Minimum streak length to include (default 3)
+        matchup: Optional matchup filter (e.g., "TvZ")
+        map_name: Optional map name filter (partial match)
+        days: Optional filter for last N days
+
+    Returns:
+        List of replay dicts for all games in qualifying streaks,
+        INCLUDING the game that ends each streak.
+    """
+    # Build query to get all replays ordered chronologically (oldest first)
+    query = "SELECT * FROM replays WHERE 1=1"
+    params = []
+
+    if matchup:
+        query += " AND UPPER(matchup) = UPPER(?)"
+        params.append(matchup)
+
+    if map_name:
+        query += " AND map_name LIKE ?"
+        params.append(f"%{map_name}%")
+
+    if days:
+        query += " AND played_at >= datetime('now', ?)"
+        params.append(f"-{days} days")
+
+    query += " ORDER BY played_at ASC"
+
+    with get_connection() as conn:
+        cursor = conn.execute(query, params)
+        all_replays = [dict(row) for row in cursor.fetchall()]
+
+    if not all_replays:
+        return []
+
+    # Determine the target result based on streak type
+    target_result = "Win" if streak_type.lower() == "win" else "Loss"
+
+    result_replays = []
+    current_streak = []
+
+    for replay in all_replays:
+        replay_result = (replay.get("result") or "").capitalize()
+
+        if replay_result == target_result:
+            # Continue streak
+            current_streak.append(replay)
+        else:
+            # Streak ended - check if it qualifies
+            if len(current_streak) >= min_length:
+                # Add all games from the streak plus the ending game
+                result_replays.extend(current_streak)
+                result_replays.append(replay)
+            # Start fresh
+            current_streak = []
+
+    # Note: We don't include ongoing streaks at the end (no ending game)
+    # since user requested streaks "ending with a loss/win"
+
+    # Return in descending order (newest first) for display
+    return list(reversed(result_replays))
+
+
+def expand_results(
+    replays: list,
+    prev_count: int = 0,
+    next_count: int = 0,
+) -> list:
+    """
+    Expand replay results with adjacent games.
+
+    Args:
+        replays: Current list of replays (ordered by played_at DESC)
+        prev_count: Number of games before the oldest result to add
+        next_count: Number of games after the newest result to add
+
+    Returns:
+        Expanded list with additional games added
+    """
+    if not replays:
+        return replays
+
+    # Get replay IDs to exclude duplicates
+    existing_ids = {r["replay_id"] for r in replays}
+
+    # Get timestamps for boundary queries
+    # replays[0] is newest (highest timestamp), replays[-1] is oldest (lowest timestamp)
+    newest_timestamp = replays[0]["played_at"]
+    oldest_timestamp = replays[-1]["played_at"]
+
+    result = list(replays)  # Copy current results
+
+    # Query for next games (newer than newest)
+    if next_count > 0:
+        query = "SELECT * FROM replays WHERE played_at > ? ORDER BY played_at ASC LIMIT ?"
+        with get_connection() as conn:
+            cursor = conn.execute(query, (newest_timestamp, next_count))
+            next_games = [dict(row) for row in cursor.fetchall()]
+        # Filter out duplicates and prepend (reversed to maintain DESC order)
+        next_games = [g for g in next_games if g["replay_id"] not in existing_ids]
+        result = list(reversed(next_games)) + result
+
+    # Query for previous games (older than oldest)
+    if prev_count > 0:
+        query = "SELECT * FROM replays WHERE played_at < ? ORDER BY played_at DESC LIMIT ?"
+        with get_connection() as conn:
+            cursor = conn.execute(query, (oldest_timestamp, prev_count))
+            prev_games = [dict(row) for row in cursor.fetchall()]
+        # Filter out duplicates and append (already in DESC order)
+        prev_games = [g for g in prev_games if g["replay_id"] not in existing_ids]
+        result = result + prev_games
+
+    return result
+
+
+def get_unique_map_names() -> list:
+    """Get list of unique map names from database."""
+    query = "SELECT DISTINCT map_name FROM replays WHERE map_name IS NOT NULL ORDER BY map_name"
+    with get_connection() as conn:
+        cursor = conn.execute(query)
+        return [row[0] for row in cursor.fetchall()]

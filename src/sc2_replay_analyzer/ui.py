@@ -8,14 +8,19 @@ from datetime import datetime
 import re
 from typing import Optional
 
+from prompt_toolkit import PromptSession
+from prompt_toolkit.history import FileHistory
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 
+from .commands import CommandKey, FILTER_COMMANDS, SIMPLE_COMMANDS
+from .completer import SC2Completer
 from .config import (
     get_benchmark_workers_6m,
     get_benchmark_workers_8m,
+    get_config_dir,
     get_display_columns,
     add_display_columns,
     remove_display_columns,
@@ -105,6 +110,7 @@ def get_column_value(col_key: str, r: dict):
     renderers = {
         "date": lambda: format_date(r.get("played_at")),
         "map": lambda: (r.get("map_name") or "-")[:14],
+        "opponent": lambda: (r.get("opponent_name") or "-")[:16],
         "matchup": lambda: r.get("matchup") or "-",
         "result": lambda: format_result(r.get("result")),
         "mmr": lambda: format_mmr(r.get("player_mmr"), r.get("opponent_mmr")),
@@ -370,6 +376,10 @@ class FilterState:
     max_length: Optional[int] = None
     min_workers_8m: Optional[int] = None
     max_workers_8m: Optional[int] = None
+    streak_type: Optional[str] = None  # "win" or "loss"
+    min_streak_length: Optional[int] = None
+    prev_games: int = 0  # Number of previous games to add
+    next_games: int = 0  # Number of next games to add
 
     def describe(self, count: int) -> str:
         """Return human-readable filter description."""
@@ -420,6 +430,20 @@ class FilterState:
         if worker_parts:
             parts.append(f"workers@8m {', '.join(worker_parts)}")
 
+        # Streak filter
+        if self.streak_type and self.min_streak_length:
+            streak_ending = "loss" if self.streak_type == "win" else "win"
+            parts.append(f"{self.min_streak_length}+ {self.streak_type} streaks (ending with {streak_ending})")
+
+        # Prev/next games
+        expand_parts = []
+        if self.prev_games > 0:
+            expand_parts.append(f"+{self.prev_games} prev")
+        if self.next_games > 0:
+            expand_parts.append(f"+{self.next_games} next")
+        if expand_parts:
+            parts.append(f"({', '.join(expand_parts)})")
+
         # Build final string
         base = parts[0]
         modifiers = parts[1:] if len(parts) > 1 else []
@@ -440,6 +464,10 @@ class FilterState:
         self.max_length = None
         self.min_workers_8m = None
         self.max_workers_8m = None
+        self.streak_type = None
+        self.min_streak_length = None
+        self.prev_games = 0
+        self.next_games = 0
         self.limit = 50
 
 
@@ -468,14 +496,17 @@ def parse_filter_command(cmd: str, state: FilterState) -> tuple:
     if cmd.lower() in ('h', 'help', '?'):
         return state, "HELP"
 
-    # Parse -n <num>
-    match = re.match(r'-n\s+(\d+)', cmd)
+    # Parse -n/--limit <num>
+    cmd_def = FILTER_COMMANDS[CommandKey.LIMIT]
+    match = re.match(cmd_def.build_regex(), cmd)
     if match:
         state.limit = int(match.group(1))
         return state, None
 
-    # Parse -m <matchup>
-    match = re.match(r'-m\s+(\w+)', cmd, re.IGNORECASE)
+    # Parse -m/--matchup <matchup>
+    cmd_def = FILTER_COMMANDS[CommandKey.MATCHUP]
+    flags = 0 if cmd_def.case_sensitive else re.IGNORECASE
+    match = re.match(cmd_def.build_regex(), cmd, flags)
     if match:
         matchup = match.group(1).upper()
         # Normalize: tvz -> TvZ
@@ -484,8 +515,10 @@ def parse_filter_command(cmd: str, state: FilterState) -> tuple:
         state.matchup = matchup
         return state, None
 
-    # Parse -r <result> (W/L/win/loss)
-    match = re.match(r'-r\s+(\w+)', cmd, re.IGNORECASE)
+    # Parse -r/--result <result> (W/L/win/loss)
+    cmd_def = FILTER_COMMANDS[CommandKey.RESULT]
+    flags = 0 if cmd_def.case_sensitive else re.IGNORECASE
+    match = re.match(cmd_def.build_regex(), cmd, flags)
     if match:
         result = match.group(1).lower()
         if result in ('w', 'win'):
@@ -496,37 +529,78 @@ def parse_filter_command(cmd: str, state: FilterState) -> tuple:
             state.result = result.capitalize()
         return state, None
 
-    # Parse -l <op><time> (e.g., -l >8:00, -l <5:00, -l >=10:00, -l <=5:00)
-    match = re.match(r'-l\s*([<>]=?)\s*([\d:]+)', cmd)
+    # Parse -l/--length <op><time> (e.g., -l >8:00, --length <5:00)
+    cmd_def = FILTER_COMMANDS[CommandKey.LENGTH]
+    match = re.match(cmd_def.build_regex(), cmd)
     if match:
         op, time_str = match.groups()
         seconds = parse_time(time_str)
         if op in ('>', '>='):
             state.min_length = seconds
+            # Clear max if it conflicts (max < new min)
+            if state.max_length is not None and state.max_length < seconds:
+                state.max_length = None
         else:
             state.max_length = seconds
+            # Clear min if it conflicts (min > new max)
+            if state.min_length is not None and state.min_length > seconds:
+                state.min_length = None
         return state, None
 
-    # Parse -w <op><num> (e.g., -w <40, -w >50, -w >=45, -w <=30)
-    match = re.match(r'-w\s*([<>]=?)\s*(\d+)', cmd)
+    # Parse -w/--workers <op><num> (e.g., -w <40, --workers >50)
+    cmd_def = FILTER_COMMANDS[CommandKey.WORKERS]
+    match = re.match(cmd_def.build_regex(), cmd)
     if match:
         op, num = match.groups()
+        value = int(num)
         if op in ('>', '>='):
-            state.min_workers_8m = int(num)
+            state.min_workers_8m = value
+            # Clear max if it conflicts (max < new min)
+            if state.max_workers_8m is not None and state.max_workers_8m < value:
+                state.max_workers_8m = None
         else:
-            state.max_workers_8m = int(num)
+            state.max_workers_8m = value
+            # Clear min if it conflicts (min > new max)
+            if state.min_workers_8m is not None and state.min_workers_8m > value:
+                state.min_workers_8m = None
         return state, None
 
     # Parse --map <name>
-    match = re.match(r'--map\s+(.+)', cmd, re.IGNORECASE)
+    cmd_def = FILTER_COMMANDS[CommandKey.MAP]
+    flags = 0 if cmd_def.case_sensitive else re.IGNORECASE
+    match = re.match(cmd_def.build_regex(), cmd, flags)
     if match:
         state.map_name = match.group(1).strip()
         return state, None
 
-    # Parse -d <days>
-    match = re.match(r'-d\s+(\d+)', cmd)
+    # Parse -d/--days <days>
+    cmd_def = FILTER_COMMANDS[CommandKey.DAYS]
+    match = re.match(cmd_def.build_regex(), cmd)
     if match:
         state.days = int(match.group(1))
+        return state, None
+
+    # Parse -s/--streaks win:3+ or loss:3+ (streak filter)
+    cmd_def = FILTER_COMMANDS[CommandKey.STREAKS]
+    flags = 0 if cmd_def.case_sensitive else re.IGNORECASE
+    match = re.match(cmd_def.build_regex(), cmd, flags)
+    if match:
+        state.streak_type = match.group(1).lower()
+        state.min_streak_length = int(match.group(2))
+        return state, None
+
+    # Parse +p/--prev <num> (add previous games - cumulative)
+    cmd_def = FILTER_COMMANDS[CommandKey.PREV]
+    match = re.match(cmd_def.build_regex(), cmd)
+    if match:
+        state.prev_games += int(match.group(1))
+        return state, None
+
+    # Parse +n/--next <num> (add next games - cumulative)
+    cmd_def = FILTER_COMMANDS[CommandKey.NEXT]
+    match = re.match(cmd_def.build_regex(), cmd)
+    if match:
+        state.next_games += int(match.group(1))
         return state, None
 
     # Parse columns commands
@@ -581,33 +655,34 @@ def show_columns():
 
 def show_help():
     """Display help for interactive mode commands."""
-    help_text = """
-[bold cyan]Filter Commands:[/bold cyan]
+    # Generate filter commands section from definitions
+    lines = ["", "[bold cyan]Filter Commands:[/bold cyan]", ""]
+    for cmd_def in FILTER_COMMANDS.values():
+        display = cmd_def.display_text
+        lines.append(
+            f"  [green]{display:18}[/green] {cmd_def.description:25} [dim]e.g. {cmd_def.example}[/dim]"
+        )
 
-  [green]-n <num>[/green]      Limit to N games         [dim]e.g. -n 50[/dim]
-  [green]-m <matchup>[/green]  Filter by matchup        [dim]e.g. -m TvZ[/dim]
-  [green]-r <result>[/green]   Filter by result         [dim]e.g. -r W, -r L[/dim]
-  [green]-l <op><time>[/green] Filter by game length    [dim]e.g. -l >=8:00, -l <5:00[/dim]
-  [green]-w <op><num>[/green]  Filter by workers @8m    [dim]e.g. -w <=40, -w >50[/dim]
-  [green]--map <name>[/green]  Filter by map name       [dim]e.g. --map Pylon[/dim]
-  [green]-d <days>[/green]     Games from last N days   [dim]e.g. -d 7[/dim]
-
-[bold cyan]Column Commands:[/bold cyan]
-
-  [green]columns[/green]             List available columns
-  [green]columns add <col>[/green]   Add column(s)         [dim]e.g. columns add bases_6m bases_8m[/dim]
-  [green]columns remove <col>[/green] Remove column(s)     [dim]e.g. columns remove mmr[/dim]
-  [green]columns reset[/green]       Reset to defaults
-
-[bold cyan]Other:[/bold cyan]
-
-  [yellow]clear[/yellow]        Reset all filters
-  [yellow]help[/yellow]         Show this help
-  [yellow]q[/yellow]            Quit
-
-[dim]Operators: > >= < <=   |   Filters stack together. Use 'clear' to reset all.[/dim]
-"""
-    console.print(help_text)
+    # Static sections
+    lines.extend([
+        "",
+        "[bold cyan]Column Commands:[/bold cyan]",
+        "",
+        "  [green]columns[/green]             List available columns",
+        "  [green]columns add <col>[/green]   Add column(s)         [dim]e.g. columns add bases_6m bases_8m[/dim]",
+        "  [green]columns remove <col>[/green] Remove column(s)     [dim]e.g. columns remove mmr[/dim]",
+        "  [green]columns reset[/green]       Reset to defaults",
+        "",
+        "[bold cyan]Other:[/bold cyan]",
+        "",
+        "  [yellow]clear[/yellow]        Reset all filters",
+        "  [yellow]help[/yellow]         Show this help",
+        "  [yellow]q[/yellow]            Quit",
+        "",
+        "[dim]Operators: > >= < <=   |   Filters stack together. Use 'clear' to reset all.[/dim]",
+        "[dim]+p/+n commands are cumulative (each use adds more games).[/dim]",
+    ])
+    console.print("\n".join(lines))
 
 
 def run_interactive_mode():
@@ -617,27 +692,47 @@ def run_interactive_mode():
     db.init_db()
     state = FilterState()
 
+    # Setup prompt_toolkit session with history and completion
+    history_file = get_config_dir() / "interactive_history.txt"
+    session = PromptSession(
+        history=FileHistory(str(history_file)),
+        completer=SC2Completer(get_map_names_func=db.get_unique_map_names),
+    )
+
     console.print()
     console.print("[bold cyan]SC2 Replay Analyzer - Interactive Mode[/bold cyan]")
-    console.print("[dim]Type commands to filter. 'help' for options, 'q' to quit.[/dim]")
+    console.print("[dim]Type commands to filter. 'help' for options, 'q' to quit. Tab for completion.[/dim]")
     console.print()
 
     need_refresh = True  # Flag to control when to redraw table
 
     while True:
         if need_refresh:
-            # Fetch and display replays with current filters
-            replays = db.get_replays(
-                matchup=state.matchup,
-                result=state.result,
-                map_name=state.map_name,
-                days=state.days,
-                limit=state.limit,
-                min_length=state.min_length,
-                max_length=state.max_length,
-                min_workers_8m=state.min_workers_8m,
-                max_workers_8m=state.max_workers_8m,
-            )
+            # Fetch replays - use streak query if streak filter is active
+            if state.streak_type and state.min_streak_length:
+                replays = db.get_streaks(
+                    streak_type=state.streak_type,
+                    min_length=state.min_streak_length,
+                    matchup=state.matchup,
+                    map_name=state.map_name,
+                    days=state.days,
+                )
+            else:
+                replays = db.get_replays(
+                    matchup=state.matchup,
+                    result=state.result,
+                    map_name=state.map_name,
+                    days=state.days,
+                    limit=state.limit,
+                    min_length=state.min_length,
+                    max_length=state.max_length,
+                    min_workers_8m=state.min_workers_8m,
+                    max_workers_8m=state.max_workers_8m,
+                )
+
+            # Expand results with adjacent games if requested
+            if state.prev_games > 0 or state.next_games > 0:
+                replays = db.expand_results(replays, state.prev_games, state.next_games)
 
             # Display table
             show_replays_table(replays)
@@ -654,7 +749,7 @@ def run_interactive_mode():
         # Get user input
         try:
             console.print()
-            cmd = console.input("[bold green]> [/bold green]").strip()
+            cmd = session.prompt("> ").strip()
         except (KeyboardInterrupt, EOFError):
             console.print("\n[dim]Goodbye![/dim]")
             break

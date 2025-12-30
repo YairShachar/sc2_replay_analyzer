@@ -96,6 +96,7 @@ SNAPSHOTS = {
 AVAILABLE_COLUMNS = {
     "date": ("Date", 12, "left"),
     "map": ("Map", 14, "left"),
+    "opponent": ("Opponent", 16, "left"),
     "matchup": ("vs", 5, "left"),
     "result": ("Result", 6, "left"),
     "mmr": ("MMR", 12, "right"),
