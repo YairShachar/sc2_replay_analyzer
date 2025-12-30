@@ -95,6 +95,10 @@ echo "Updating version to $VERSION..."
 sed -i '' "s/version = \".*\"/version = \"$VERSION\"/" pyproject.toml
 sed -i '' "s/__version__ = \".*\"/__version__ = \"$VERSION\"/" src/sc2_replay_analyzer/__init__.py
 
+# Update README with auto-generated sections
+echo "Updating README..."
+python scripts/generate_readme.py
+
 echo "Building..."
 rm -rf dist/
 python -m build

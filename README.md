@@ -7,6 +7,8 @@ Analyze your StarCraft II replays with filtering, stats, and beautiful terminal 
 - **Auto-detect** SC2 replay folders on Mac, Windows, and Linux
 - **Parse replays** and extract worker counts, army value, APM, MMR, and more
 - **Interactive filtering** - dynamically filter by matchup, result, length, workers
+- **Auto-completion** - tab-complete commands with usage hints
+- **Win/loss streaks** - find patterns in your games
 - **Win/loss statistics** with averages and matchup breakdowns
 - **SQLite caching** - parse each replay only once
 
@@ -47,34 +49,51 @@ sc2 stats
 
 ## Interactive Mode
 
-The `sc2 live` command opens an interactive filtering mode:
+The `sc2 live` command opens an interactive filtering mode with tab-completion:
 
 ```
 SC2 Replay Analyzer - Interactive Mode
-Type commands to filter. 'help' for options, 'q' to quit.
+Type commands to filter. 'help' for options, 'q' to quit. Tab for completion.
 
 > -m TvZ          # Filter by matchup
 > -r W            # Show only wins
 > -l >10:00       # Games longer than 10 minutes
 > -w <40          # Games with <40 workers at 8min
+> -s win:3+       # Find 3+ win streaks
+> +p 1            # Add 1 previous game (cumulative)
 > clear           # Reset all filters
 > q               # Quit
 ```
 
 ### Filter Commands
 
+<!-- AUTO-GENERATED: FILTER_COMMANDS -->
 | Command | Description | Example |
 |---------|-------------|---------|
-| `-n <num>` | Limit to N games | `-n 50` |
-| `-m <matchup>` | Filter by matchup | `-m TvZ` |
-| `-r <result>` | Filter by result | `-r W`, `-r L` |
-| `-l <op><time>` | Filter by length | `-l >=8:00`, `-l <5:00` |
-| `-w <op><num>` | Filter by workers @8m | `-w <=40`, `-w >50` |
-| `--map <name>` | Filter by map name | `--map Pylon` |
-| `-d <days>` | Games from last N days | `-d 7` |
+| `-n, --limit` | Limit results to N games | `-n 50` |
+| `-m, --matchup` | Filter by matchup (TvZ, TvP, etc) | `-m TvZ` |
+| `-r, --result` | Filter by result (W/L) | `-r W` |
+| `-l, --length` | Filter by game length | `-l >8:00` |
+| `-w, --workers` | Filter by workers @8m | `-w <40` |
+| `-d, --days` | Games from last N days | `-d 7` |
+| `-s, --streaks` | Find win/loss streaks | `-s win:3+` |
+| `--map` | Filter by map name | `--map Alcyone` |
+| `+p, --prev` | Add N previous games (cumulative) | `+p 1` |
+| `+n, --next` | Add N next games (cumulative) | `+n 2` |
+| `columns` | Manage display columns | |
 | `clear` | Reset all filters | |
 | `help` | Show help | |
 | `q` | Quit | |
+<!-- END AUTO-GENERATED -->
+
+### Column Commands
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `columns` | List available columns | |
+| `columns add <col>` | Add column(s) to display | `columns add bases_6m` |
+| `columns remove <col>` | Remove column(s) | `columns remove mmr` |
+| `columns reset` | Reset to default columns | |
 
 ## Configuration
 
@@ -94,7 +113,21 @@ columns = ["date", "map", "matchup", "result", "mmr", "apm", "workers_8m", "army
 
 ### Available Columns
 
-`date`, `map`, `matchup`, `result`, `mmr`, `opponent_mmr`, `apm`, `opponent_apm`, `workers_6m`, `workers_8m`, `workers_10m`, `army`, `length`, `bases_6m`, `bases_8m`, `worker_kills`, `worker_losses`
+<!-- AUTO-GENERATED: AVAILABLE_COLUMNS -->
+`apm`, `army`, `bases_10m`, `bases_6m`, `bases_8m`, `date`, `length`, `map`, `matchup`, `mmr`, `opponent`, `opponent_apm`, `opponent_mmr`, `result`, `worker_kills`, `worker_losses`, `workers_10m`, `workers_6m`, `workers_8m`
+<!-- END AUTO-GENERATED -->
+
+## Development
+
+### Updating README
+
+After modifying commands, run:
+
+```bash
+python scripts/generate_readme.py
+```
+
+This updates the auto-generated sections marked with `<!-- AUTO-GENERATED -->` comments.
 
 ## Requirements
 
