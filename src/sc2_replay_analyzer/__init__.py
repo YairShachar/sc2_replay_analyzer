@@ -1,3 +1,3 @@
 """SC2 Replay Analyzer - Track your StarCraft II progress."""
 
-__version__ = "0.5.1"
+__version__ = "0.6.0"
