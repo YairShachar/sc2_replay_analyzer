@@ -912,11 +912,12 @@ def show_help():
     console.print("\n".join(lines))
 
 
-def run_interactive_mode(server_port: Optional[int] = None):
+def run_interactive_mode(server_port: Optional[int] = None, startup_message: Optional[str] = None):
     """Run the interactive filtering mode.
 
     Args:
         server_port: Port the overlay server is running on, if any
+        startup_message: Message to display after first table refresh (e.g., server status)
     """
     from . import db
 
@@ -937,7 +938,7 @@ def run_interactive_mode(server_port: Optional[int] = None):
 
     need_refresh = True  # Flag to control when to redraw table
     replays = []  # Keep track of current replays for position-based tagging
-    pending_message = None  # Message to show after table refresh
+    pending_message = startup_message  # Show startup message after first table refresh
 
     while True:
         if need_refresh:

@@ -200,30 +200,27 @@ def ensure_config():
 def _start_overlay_server():
     """Start overlay server if enabled and Flask is available.
 
-    Returns the port number if server started, None otherwise.
+    Returns tuple of (port, startup_message) where port is None if server didn't start.
+    The startup_message should be displayed after the table refresh.
     """
     if not is_server_enabled():
-        return None
+        return None, None
 
     try:
         from .server import is_flask_available, start_server_background
     except ImportError:
-        return None  # Server module not available
+        return None, None  # Server module not available
 
     if not is_flask_available():
-        ui.console.print("[yellow]Server disabled: Flask not installed[/yellow]")
-        ui.console.print("[dim]  Install with: pip install flask[/dim]")
-        return None
+        msg = "[yellow]Server disabled: Flask not installed[/yellow]\n[dim]  Install with: pip install flask[/dim]"
+        return None, msg
 
     port = get_server_port()
     actual_port, _ = start_server_background(port=port)
     if actual_port:
-        ui.console.print(f"[dim]Hosting on http://localhost:{actual_port}/[/dim]")
-        ui.console.print(
-            f"[dim]  └─ Overlay: http://localhost:{actual_port}/overlays/mmr-graph[/dim]"
-        )
-        return actual_port
-    return None
+        msg = f"[dim]Hosting on http://localhost:{actual_port}/[/dim]\n[dim]  └─ Overlay: http://localhost:{actual_port}/overlays/mmr-graph[/dim]"
+        return actual_port, msg
+    return None, None
 
 
 def cmd_config(args):
@@ -350,8 +347,8 @@ def cmd_live(args):
     ensure_config()
     db.init_db()
     auto_scan()
-    server_port = _start_overlay_server()
-    ui.run_interactive_mode(server_port=server_port)
+    server_port, server_msg = _start_overlay_server()
+    ui.run_interactive_mode(server_port=server_port, startup_message=server_msg)
 
 
 def cmd_tag(args):
@@ -638,8 +635,8 @@ def main():
         ensure_config()
         db.init_db()
         auto_scan()
-        server_port = _start_overlay_server()
-        ui.run_interactive_mode(server_port=server_port)
+        server_port, server_msg = _start_overlay_server()
+        ui.run_interactive_mode(server_port=server_port, startup_message=server_msg)
         return
 
     args.func(args)
