@@ -11,6 +11,7 @@ Analyze your StarCraft II replays with filtering, stats, and beautiful terminal 
 - **Win/loss streaks** - find patterns in your games
 - **Win/loss statistics** with averages and matchup breakdowns
 - **SQLite caching** - parse each replay only once
+- **Streaming overlays** - OBS-compatible MMR graph overlay for Twitch/YouTube
 
 ## Installation
 
@@ -116,6 +117,39 @@ columns = ["date", "map", "matchup", "result", "mmr", "apm", "workers_8m", "army
 <!-- AUTO-GENERATED: AVAILABLE_COLUMNS -->
 `apm`, `army`, `bases_10m`, `bases_6m`, `bases_8m`, `date`, `length`, `map`, `matchup`, `mmr`, `opponent`, `opponent_apm`, `opponent_mmr`, `result`, `worker_kills`, `worker_losses`, `workers_10m`, `workers_6m`, `workers_8m`
 <!-- END AUTO-GENERATED -->
+
+## Streaming Overlay (OBS)
+
+Display your MMR progression as a live overlay on your stream.
+
+### Installation
+
+```bash
+pip install sc2-replay-analyzer[server]
+```
+
+### Usage
+
+1. Run `sc2` or `sc2 live` (overlay server starts automatically)
+2. In OBS: Add **Browser Source**
+3. URL: `http://localhost:8337/overlays/mmr-graph`
+4. Size: 800 x 250
+
+The overlay shows:
+- Your player name and current MMR
+- MMR change over last 100 games
+- Win rate percentage
+- Interactive graph with win/loss colored points
+
+### Configuration
+
+Add to `~/.sc2analyzer/config.toml`:
+
+```toml
+[server]
+enabled = true  # Set to false to disable overlay server
+port = 8337     # Change port if needed
+```
 
 ## Development
 

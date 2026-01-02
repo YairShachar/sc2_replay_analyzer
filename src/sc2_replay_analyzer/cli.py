@@ -32,6 +32,8 @@ from .config import (
     add_display_columns,
     remove_display_columns,
     reset_display_columns,
+    is_server_enabled,
+    get_server_port,
     DEFAULT_CONFIG,
     AVAILABLE_COLUMNS,
 )
@@ -195,6 +197,27 @@ def ensure_config():
             sys.exit(1)
 
 
+def _start_overlay_server():
+    """Start overlay server if enabled and Flask is available."""
+    if not is_server_enabled():
+        return
+
+    try:
+        from .server import is_flask_available, start_server_background
+    except ImportError:
+        return  # Server module not available
+
+    if not is_flask_available():
+        return  # Silently skip if Flask not installed
+
+    port = get_server_port()
+    actual_port, _ = start_server_background(port=port)
+    if actual_port:
+        ui.console.print(
+            f"[dim]Overlay server: http://localhost:{actual_port}/overlays/mmr-graph[/dim]"
+        )
+
+
 def cmd_config(args):
     """Run setup wizard to configure or reconfigure."""
     run_setup_wizard()
@@ -319,6 +342,7 @@ def cmd_live(args):
     ensure_config()
     db.init_db()
     auto_scan()
+    _start_overlay_server()
     ui.run_interactive_mode()
 
 
@@ -454,6 +478,7 @@ def main():
         ensure_config()
         db.init_db()
         auto_scan()
+        _start_overlay_server()
         ui.run_interactive_mode()
         return
 

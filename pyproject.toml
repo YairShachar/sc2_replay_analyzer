@@ -47,9 +47,15 @@ dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
 ]
+server = [
+    "Flask>=2.0.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"sc2_replay_analyzer.server" = ["static/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

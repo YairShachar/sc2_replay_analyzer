@@ -70,6 +70,10 @@ DEFAULT_CONFIG = {
             "length",
         ],
     },
+    "server": {
+        "enabled": True,
+        "port": 8337,
+    },
 }
 
 # Unit classifications (constant, not configurable)
@@ -145,6 +149,9 @@ def load_config() -> dict:
 
         if "display" in user_config:
             config["display"].update(user_config["display"])
+
+        if "server" in user_config:
+            config["server"].update(user_config["server"])
 
     _config_cache = config
     return config
@@ -235,6 +242,20 @@ def remove_display_columns(columns: list) -> list:
 def reset_display_columns():
     """Reset columns to defaults."""
     set_display_columns(DEFAULT_CONFIG["display"]["columns"].copy())
+
+
+# ============================================================
+# SERVER CONFIG ACCESSORS
+# ============================================================
+
+def get_server_port() -> int:
+    """Get the configured server port."""
+    return load_config()["server"]["port"]
+
+
+def is_server_enabled() -> bool:
+    """Check if the overlay server is enabled."""
+    return load_config()["server"].get("enabled", True)
 
 
 # ============================================================
