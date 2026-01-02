@@ -68,6 +68,13 @@ class TestDefaultConfig:
         for col in columns:
             assert col in AVAILABLE_COLUMNS, f"Column '{col}' not in AVAILABLE_COLUMNS"
 
+    def test_default_auto_scan_interval(self):
+        """Default auto-scan interval is reasonable."""
+        from sc2_replay_analyzer.config import DEFAULT_CONFIG
+
+        assert "auto_scan_interval_ms" in DEFAULT_CONFIG
+        assert DEFAULT_CONFIG["auto_scan_interval_ms"] == 2000
+
 
 class TestConstants:
     """Tests for module constants."""
@@ -251,6 +258,48 @@ class TestConfigAccessors:
         columns = get_display_columns()
         assert isinstance(columns, list)
         assert len(columns) > 0
+
+    def test_get_auto_scan_interval_ms_default(self, mock_config_dir):
+        """get_auto_scan_interval_ms returns default value."""
+        from sc2_replay_analyzer.config import get_auto_scan_interval_ms, clear_config_cache
+
+        clear_config_cache()
+        interval = get_auto_scan_interval_ms()
+        assert interval == 2000
+
+    def test_get_auto_scan_interval_ms_custom(self, mock_config_dir):
+        """get_auto_scan_interval_ms returns custom value from config."""
+        from sc2_replay_analyzer.config import (
+            get_auto_scan_interval_ms, save_config, clear_config_cache
+        )
+
+        clear_config_cache()
+        save_config({
+            "player_name": "",
+            "replay_folder": "",
+            "auto_scan_interval_ms": 500
+        })
+
+        clear_config_cache()
+        interval = get_auto_scan_interval_ms()
+        assert interval == 500
+
+    def test_get_auto_scan_interval_ms_disabled(self, mock_config_dir):
+        """get_auto_scan_interval_ms can be set to 0 to disable."""
+        from sc2_replay_analyzer.config import (
+            get_auto_scan_interval_ms, save_config, clear_config_cache
+        )
+
+        clear_config_cache()
+        save_config({
+            "player_name": "",
+            "replay_folder": "",
+            "auto_scan_interval_ms": 0
+        })
+
+        clear_config_cache()
+        interval = get_auto_scan_interval_ms()
+        assert interval == 0
 
 
 class TestColumnManagement:

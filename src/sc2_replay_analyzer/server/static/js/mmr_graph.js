@@ -4,7 +4,8 @@ let chart = null;
 // Configuration constants
 const ADAPTIVE_PADDING_PERCENT = 0.18;
 const MIN_Y_RANGE = 200;
-const REFRESH_INTERVAL_MS = 30000;
+// Note: Keep in sync with auto_scan_interval_ms in config.py (default: 2000)
+const REFRESH_INTERVAL_MS = 2000;
 const MMR_MIN_VALID = 2000;
 const MMR_MAX_VALID = 8000;
 

@@ -6,6 +6,8 @@ Terminal UI using Rich library for formatted tables and output.
 from dataclasses import dataclass
 from datetime import datetime
 import re
+import threading
+import time
 from typing import Optional
 
 from prompt_toolkit import PromptSession
@@ -18,6 +20,7 @@ from rich.text import Text
 from .commands import CommandKey, FILTER_COMMANDS, SIMPLE_COMMANDS
 from .completer import SC2Completer
 from .config import (
+    get_auto_scan_interval_ms,
     get_benchmark_workers_6m,
     get_benchmark_workers_8m,
     get_config_dir,
@@ -920,6 +923,7 @@ def run_interactive_mode(server_port: Optional[int] = None, startup_message: Opt
         startup_message: Message to display after first table refresh (e.g., server status)
     """
     from . import db
+    from .cli import auto_scan
 
     db.init_db()
     state = FilterState()
@@ -940,178 +944,212 @@ def run_interactive_mode(server_port: Optional[int] = None, startup_message: Opt
     replays = []  # Keep track of current replays for position-based tagging
     pending_message = startup_message  # Show startup message after first table refresh
 
-    while True:
-        if need_refresh:
-            # Fetch replays - use streak query if streak filter is active
-            if state.streak_type and state.min_streak_length:
-                replays = db.get_streaks(
-                    streak_type=state.streak_type,
-                    min_length=state.min_streak_length,
-                    matchup=state.matchup,
-                    map_name=state.map_name,
-                    days=state.days,
-                )
-            else:
-                replays = db.get_replays(
-                    matchup=state.matchup,
-                    result=state.result,
-                    map_name=state.map_name,
-                    days=state.days,
-                    limit=state.limit,
-                    min_length=state.min_length,
-                    max_length=state.max_length,
-                    min_workers_8m=state.min_workers_8m,
-                    max_workers_8m=state.max_workers_8m,
-                )
+    # Background scanner setup
+    scan_interval_ms = get_auto_scan_interval_ms()
+    new_replays_event = threading.Event()
+    stop_scanner = threading.Event()
 
-            # Expand results with adjacent games if requested
-            if state.prev_games > 0 or state.next_games > 0:
-                replays = db.expand_results(replays, state.prev_games, state.next_games)
+    def background_scanner():
+        """Background thread that periodically scans for new replays."""
+        while not stop_scanner.is_set():
+            stop_scanner.wait(scan_interval_ms / 1000.0)
+            if stop_scanner.is_set():
+                break
+            try:
+                count = auto_scan(silent=True)
+                if count > 0:
+                    new_replays_event.set()
+            except Exception:
+                pass  # Continue scanning even if one cycle fails
 
-            # Get tagged dates for display
-            tagged_dates = db.get_tagged_dates()
+    # Start scanner if enabled
+    scanner_thread = None
+    if scan_interval_ms > 0:
+        scanner_thread = threading.Thread(target=background_scanner, daemon=True)
+        scanner_thread.start()
 
-            # Display table
-            show_replays_table(replays, tagged_dates)
+    try:
+        while True:
+            # Check for new replays from background scanner
+            if new_replays_event.is_set():
+                new_replays_event.clear()
+                need_refresh = True
+                pending_message = "[green]New replay(s) detected[/green]"
 
-            # Show summary row
-            show_summary_row(replays)
-
-            # Show filter status below table
-            filter_desc = state.describe(len(replays))
-            console.print(f"[dim]{filter_desc}[/dim]")
-
-            # Show pending message after table if any
-            if pending_message:
-                console.print(pending_message)
-                pending_message = None
-
-        need_refresh = True  # Default to refresh on next iteration
-
-        # Get user input
-        try:
-            console.print()
-            cmd = session.prompt("> ").strip()
-        except (KeyboardInterrupt, EOFError):
-            console.print("\n[dim]Goodbye![/dim]")
-            break
-
-        if cmd.lower() in ('q', 'quit', 'exit'):
-            console.print("[dim]Goodbye![/dim]")
-            break
-
-        # Parse and apply command
-        state, error = parse_filter_command(cmd, state)
-
-        if error == "HELP":
-            show_help()
-            need_refresh = False  # Stay on current view after help
-        elif error == "COLUMNS":
-            show_columns()
-            need_refresh = False  # Stay on current view after columns
-        elif error == "TAGS":
-            show_tags()
-            need_refresh = False
-        elif error == "ENDPOINTS":
-            show_endpoints(server_port)
-            need_refresh = False
-        elif isinstance(error, tuple) and error[0] == "TAG_START":
-            _, start_date, label = error
-            # Use today if no date provided
-            if start_date is None:
-                start_date = datetime.now().strftime("%Y-%m-%d")
-            elif not is_valid_date(start_date):
-                console.print(f"[red]Invalid date format: {start_date}. Use YYYY-MM-DD[/red]")
-                need_refresh = False
-                continue
-
-            # Check for ongoing tags and notify user
-            ongoing_tags = db.get_ongoing_tags()
-            if ongoing_tags:
-                ongoing_labels = [t["label"] for t in ongoing_tags]
-                console.print(f"[dim]Note: {len(ongoing_tags)} ongoing tag(s): {', '.join(ongoing_labels)}[/dim]")
-
-            # Add the ongoing tag
-            if db.add_tag(start_date, label):
-                color = get_tag_color(label)
-                pending_message = f"[green]Started ongoing tag:[/green] [{color}]▸[/{color}] {label} (from {start_date})"
-            else:
-                pending_message = f"[yellow]Tag already exists:[/yellow] {label} from {start_date}"
-            need_refresh = True
-
-        elif isinstance(error, tuple) and error[0] == "TAG_END":
-            _, end_date, label = error
-            # Use today if no date provided
-            if end_date is None:
-                end_date = datetime.now().strftime("%Y-%m-%d")
-            elif not is_valid_date(end_date):
-                console.print(f"[red]Invalid date format: {end_date}. Use YYYY-MM-DD[/red]")
-                need_refresh = False
-                continue
-
-            # End the ongoing tag
-            if db.end_tag(label, end_date):
-                color = get_tag_color(label)
-                pending_message = f"[green]Ended tag:[/green] [{color}]◆─◆[/{color}] {label} (ended {end_date})"
-            else:
-                pending_message = f"[yellow]No ongoing tag found:[/yellow] {label}"
-            need_refresh = True
-
-        elif isinstance(error, tuple) and error[0] == "TAG":
-            _, date_or_pos, label = error
-            # Resolve position to date if needed
-            if date_or_pos.isdigit():
-                tag_date = get_date_from_position(int(date_or_pos), replays)
-                if not tag_date:
-                    console.print(f"[red]Invalid position: {date_or_pos}[/red]")
-                    need_refresh = False
-                    continue
-            elif is_valid_date(date_or_pos):
-                tag_date = date_or_pos
-            else:
-                console.print(f"[red]Invalid date format: {date_or_pos}. Use YYYY-MM-DD[/red]")
-                need_refresh = False
-                continue
-
-            # Check for ongoing tags and notify user
-            ongoing_tags = db.get_ongoing_tags()
-            if ongoing_tags:
-                ongoing_labels = [t["label"] for t in ongoing_tags]
-                console.print(f"[dim]Note: {len(ongoing_tags)} ongoing tag(s): {', '.join(ongoing_labels)}[/dim]")
-
-            # Add the tag (single date with same start/end)
-            if db.add_tag(tag_date, label, end_date=tag_date):
-                color = get_tag_color(label)
-                pending_message = f"[green]Added tag:[/green] [{color}]◆[/{color}] {label} on {tag_date}"
-            else:
-                pending_message = f"[yellow]Tag already exists:[/yellow] {label} on {tag_date}"
-            need_refresh = True  # Refresh to show tag marker
-        elif isinstance(error, tuple) and error[0] == "UNTAG":
-            _, date_or_pos, label = error
-            # Resolve position to date if needed
-            if date_or_pos.isdigit():
-                tag_date = get_date_from_position(int(date_or_pos), replays)
-                if not tag_date:
-                    console.print(f"[red]Invalid position: {date_or_pos}[/red]")
-                    need_refresh = False
-                    continue
-            elif is_valid_date(date_or_pos):
-                tag_date = date_or_pos
-            else:
-                console.print(f"[red]Invalid date format: {date_or_pos}. Use YYYY-MM-DD[/red]")
-                need_refresh = False
-                continue
-            # Remove the tag(s)
-            count = db.remove_tag(tag_date, label)
-            if count > 0:
-                if label:
-                    pending_message = f"[green]Removed tag:[/green] {label} from {tag_date}"
+            if need_refresh:
+                # Fetch replays - use streak query if streak filter is active
+                if state.streak_type and state.min_streak_length:
+                    replays = db.get_streaks(
+                        streak_type=state.streak_type,
+                        min_length=state.min_streak_length,
+                        matchup=state.matchup,
+                        map_name=state.map_name,
+                        days=state.days,
+                    )
                 else:
-                    pending_message = f"[green]Removed {count} tag(s)[/green] from {tag_date}"
-            else:
-                pending_message = f"[yellow]No matching tags found for {tag_date}[/yellow]"
-            need_refresh = True  # Refresh to update tag markers
-        elif error:
-            console.print(f"[red]{error}[/red]")
-            console.print("[dim]Type 'help' for available commands.[/dim]")
-            need_refresh = False  # Stay on current view after error
+                    replays = db.get_replays(
+                        matchup=state.matchup,
+                        result=state.result,
+                        map_name=state.map_name,
+                        days=state.days,
+                        limit=state.limit,
+                        min_length=state.min_length,
+                        max_length=state.max_length,
+                        min_workers_8m=state.min_workers_8m,
+                        max_workers_8m=state.max_workers_8m,
+                    )
+
+                # Expand results with adjacent games if requested
+                if state.prev_games > 0 or state.next_games > 0:
+                    replays = db.expand_results(replays, state.prev_games, state.next_games)
+
+                # Get tagged dates for display
+                tagged_dates = db.get_tagged_dates()
+
+                # Display table
+                show_replays_table(replays, tagged_dates)
+
+                # Show summary row
+                show_summary_row(replays)
+
+                # Show filter status below table
+                filter_desc = state.describe(len(replays))
+                console.print(f"[dim]{filter_desc}[/dim]")
+
+                # Show pending message after table if any
+                if pending_message:
+                    console.print(pending_message)
+                    pending_message = None
+
+            need_refresh = True  # Default to refresh on next iteration
+
+            # Get user input
+            try:
+                console.print()
+                cmd = session.prompt("> ").strip()
+            except (KeyboardInterrupt, EOFError):
+                console.print("\n[dim]Goodbye![/dim]")
+                break
+
+            if cmd.lower() in ('q', 'quit', 'exit'):
+                console.print("[dim]Goodbye![/dim]")
+                break
+
+            # Parse and apply command
+            state, error = parse_filter_command(cmd, state)
+
+            if error == "HELP":
+                show_help()
+                need_refresh = False  # Stay on current view after help
+            elif error == "COLUMNS":
+                show_columns()
+                need_refresh = False  # Stay on current view after columns
+            elif error == "TAGS":
+                show_tags()
+                need_refresh = False
+            elif error == "ENDPOINTS":
+                show_endpoints(server_port)
+                need_refresh = False
+            elif isinstance(error, tuple) and error[0] == "TAG_START":
+                _, start_date, label = error
+                # Use today if no date provided
+                if start_date is None:
+                    start_date = datetime.now().strftime("%Y-%m-%d")
+                elif not is_valid_date(start_date):
+                    console.print(f"[red]Invalid date format: {start_date}. Use YYYY-MM-DD[/red]")
+                    need_refresh = False
+                    continue
+
+                # Check for ongoing tags and notify user
+                ongoing_tags = db.get_ongoing_tags()
+                if ongoing_tags:
+                    ongoing_labels = [t["label"] for t in ongoing_tags]
+                    console.print(f"[dim]Note: {len(ongoing_tags)} ongoing tag(s): {', '.join(ongoing_labels)}[/dim]")
+
+                # Add the ongoing tag
+                if db.add_tag(start_date, label):
+                    color = get_tag_color(label)
+                    pending_message = f"[green]Started ongoing tag:[/green] [{color}]▸[/{color}] {label} (from {start_date})"
+                else:
+                    pending_message = f"[yellow]Tag already exists:[/yellow] {label} from {start_date}"
+                need_refresh = True
+
+            elif isinstance(error, tuple) and error[0] == "TAG_END":
+                _, end_date, label = error
+                # Use today if no date provided
+                if end_date is None:
+                    end_date = datetime.now().strftime("%Y-%m-%d")
+                elif not is_valid_date(end_date):
+                    console.print(f"[red]Invalid date format: {end_date}. Use YYYY-MM-DD[/red]")
+                    need_refresh = False
+                    continue
+
+                # End the ongoing tag
+                if db.end_tag(label, end_date):
+                    color = get_tag_color(label)
+                    pending_message = f"[green]Ended tag:[/green] [{color}]◆─◆[/{color}] {label} (ended {end_date})"
+                else:
+                    pending_message = f"[yellow]No ongoing tag found:[/yellow] {label}"
+                need_refresh = True
+
+            elif isinstance(error, tuple) and error[0] == "TAG":
+                _, date_or_pos, label = error
+                # Resolve position to date if needed
+                if date_or_pos.isdigit():
+                    tag_date = get_date_from_position(int(date_or_pos), replays)
+                    if not tag_date:
+                        console.print(f"[red]Invalid position: {date_or_pos}[/red]")
+                        need_refresh = False
+                        continue
+                elif is_valid_date(date_or_pos):
+                    tag_date = date_or_pos
+                else:
+                    console.print(f"[red]Invalid date format: {date_or_pos}. Use YYYY-MM-DD[/red]")
+                    need_refresh = False
+                    continue
+
+                # Check for ongoing tags and notify user
+                ongoing_tags = db.get_ongoing_tags()
+                if ongoing_tags:
+                    ongoing_labels = [t["label"] for t in ongoing_tags]
+                    console.print(f"[dim]Note: {len(ongoing_tags)} ongoing tag(s): {', '.join(ongoing_labels)}[/dim]")
+
+                # Add the tag (single date with same start/end)
+                if db.add_tag(tag_date, label, end_date=tag_date):
+                    color = get_tag_color(label)
+                    pending_message = f"[green]Added tag:[/green] [{color}]◆[/{color}] {label} on {tag_date}"
+                else:
+                    pending_message = f"[yellow]Tag already exists:[/yellow] {label} on {tag_date}"
+                need_refresh = True  # Refresh to show tag marker
+            elif isinstance(error, tuple) and error[0] == "UNTAG":
+                _, date_or_pos, label = error
+                # Resolve position to date if needed
+                if date_or_pos.isdigit():
+                    tag_date = get_date_from_position(int(date_or_pos), replays)
+                    if not tag_date:
+                        console.print(f"[red]Invalid position: {date_or_pos}[/red]")
+                        need_refresh = False
+                        continue
+                elif is_valid_date(date_or_pos):
+                    tag_date = date_or_pos
+                else:
+                    console.print(f"[red]Invalid date format: {date_or_pos}. Use YYYY-MM-DD[/red]")
+                    need_refresh = False
+                    continue
+                # Remove the tag(s)
+                count = db.remove_tag(tag_date, label)
+                if count > 0:
+                    if label:
+                        pending_message = f"[green]Removed tag:[/green] {label} from {tag_date}"
+                    else:
+                        pending_message = f"[green]Removed {count} tag(s)[/green] from {tag_date}"
+                else:
+                    pending_message = f"[yellow]No matching tags found for {tag_date}[/yellow]"
+                need_refresh = True  # Refresh to update tag markers
+            elif error:
+                console.print(f"[red]{error}[/red]")
+                console.print("[dim]Type 'help' for available commands.[/dim]")
+                need_refresh = False  # Stay on current view after error
+    finally:
+        # Signal the background scanner to stop
+        stop_scanner.set()

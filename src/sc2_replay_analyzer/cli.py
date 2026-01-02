@@ -52,8 +52,12 @@ def find_replays(folder: str) -> list:
     return sorted(replays, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
-def auto_scan() -> int:
-    """Automatically scan for new replays. Returns count of new replays found."""
+def auto_scan(silent: bool = False) -> int:
+    """Automatically scan for new replays. Returns count of new replays found.
+
+    Args:
+        silent: If True, don't print any messages (for background scanning)
+    """
     replay_folder = get_replay_folder()
     player_name = get_player_name()
 
@@ -75,7 +79,7 @@ def auto_scan() -> int:
             except Exception:
                 pass  # Silently skip errors during auto-scan
 
-    if new_count > 0:
+    if new_count > 0 and not silent:
         ui.console.print(f"[green]Found {new_count} new replay(s)[/green]")
 
     return new_count

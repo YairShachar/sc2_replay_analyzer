@@ -74,6 +74,7 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "port": 8337,
     },
+    "auto_scan_interval_ms": 2000,  # 0 to disable background scanning
 }
 
 # Unit classifications (constant, not configurable)
@@ -152,6 +153,9 @@ def load_config() -> dict:
 
         if "server" in user_config:
             config["server"].update(user_config["server"])
+
+        if "auto_scan_interval_ms" in user_config:
+            config["auto_scan_interval_ms"] = user_config["auto_scan_interval_ms"]
 
     _config_cache = config
     return config
@@ -256,6 +260,11 @@ def get_server_port() -> int:
 def is_server_enabled() -> bool:
     """Check if the overlay server is enabled."""
     return load_config()["server"].get("enabled", True)
+
+
+def get_auto_scan_interval_ms() -> int:
+    """Get the auto-scan interval in milliseconds. 0 means disabled."""
+    return load_config().get("auto_scan_interval_ms", 2000)
 
 
 # ============================================================
