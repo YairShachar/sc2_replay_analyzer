@@ -211,7 +211,9 @@ def _start_overlay_server():
         return None  # Server module not available
 
     if not is_flask_available():
-        return None  # Silently skip if Flask not installed
+        ui.console.print("[yellow]Server disabled: Flask not installed[/yellow]")
+        ui.console.print("[dim]  Install with: pip install flask[/dim]")
+        return None
 
     port = get_server_port()
     actual_port, _ = start_server_background(port=port)
