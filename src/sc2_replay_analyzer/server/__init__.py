@@ -62,7 +62,11 @@ def start_server_background(port: int = None):
     if not FLASK_AVAILABLE:
         return None, None
 
+    import logging
     from werkzeug.serving import make_server
+
+    # Suppress Werkzeug access logs (GET /api/v1/mmr/history, etc.)
+    logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
     if port is None:
         port = find_available_port()
