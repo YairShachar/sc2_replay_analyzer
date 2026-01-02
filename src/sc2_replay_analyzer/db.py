@@ -57,25 +57,41 @@ CREATE INDEX IF NOT EXISTS idx_result ON replays(result);
 CREATE INDEX IF NOT EXISTS idx_map_name ON replays(map_name);
 """
 
+TAGS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tag_date TEXT NOT NULL,
+    label TEXT NOT NULL,
+    end_date TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(tag_date, label)
+);
+CREATE INDEX IF NOT EXISTS idx_tags_date ON tags(tag_date DESC);
+CREATE INDEX IF NOT EXISTS idx_tags_label ON tags(label);
+"""
+
 
 def init_db():
     """Initialize the database and create tables if needed."""
     ensure_config_dir()
     with get_connection() as conn:
         conn.executescript(SCHEMA)
+        conn.executescript(TAGS_SCHEMA)
         # Migrations: add columns that may be missing from older databases
         _migrate_add_column(conn, "bases_by_6m", "INTEGER")
         _migrate_add_column(conn, "bases_by_8m", "INTEGER")
         _migrate_add_column(conn, "bases_by_10m", "INTEGER")
         _migrate_add_column(conn, "opponent_name", "TEXT")
+        # Tags table migrations
+        _migrate_add_column(conn, "end_date", "TEXT", table="tags")
 
 
-def _migrate_add_column(conn, column_name: str, column_type: str):
-    """Add a column to replays table if it doesn't exist."""
-    cursor = conn.execute("PRAGMA table_info(replays)")
+def _migrate_add_column(conn, column_name: str, column_type: str, table: str = "replays"):
+    """Add a column to a table if it doesn't exist."""
+    cursor = conn.execute(f"PRAGMA table_info({table})")
     existing_columns = {row[1] for row in cursor.fetchall()}
     if column_name not in existing_columns:
-        conn.execute(f"ALTER TABLE replays ADD COLUMN {column_name} {column_type}")
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_name} {column_type}")
 
 
 @contextmanager
@@ -379,3 +395,121 @@ def get_unique_map_names() -> list:
     with get_connection() as conn:
         cursor = conn.execute(query)
         return [row[0] for row in cursor.fetchall()]
+
+
+# ============================================================
+# TAGS
+# ============================================================
+
+
+def add_tag(tag_date: str, label: str, end_date: Optional[str] = None) -> bool:
+    """Add a tag to a date.
+
+    Args:
+        tag_date: Start date in YYYY-MM-DD format
+        label: Tag label text
+        end_date: Optional end date for completed ranges (YYYY-MM-DD)
+
+    Returns:
+        True if tag was added, False if duplicate
+    """
+    from datetime import datetime
+
+    with get_connection() as conn:
+        try:
+            conn.execute(
+                "INSERT INTO tags (tag_date, label, end_date, created_at) VALUES (?, ?, ?, ?)",
+                (tag_date, label, end_date, datetime.now().isoformat()),
+            )
+            return True
+        except sqlite3.IntegrityError:
+            # Duplicate tag (same date + label)
+            return False
+
+
+def get_ongoing_tags() -> list:
+    """Get all ongoing tags (tags without an end_date).
+
+    Returns:
+        List of dicts with id, tag_date, label, end_date, created_at
+    """
+    query = "SELECT * FROM tags WHERE end_date IS NULL ORDER BY tag_date DESC"
+    with get_connection() as conn:
+        cursor = conn.execute(query)
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def end_tag(label: str, end_date: str) -> bool:
+    """Set end_date for an ongoing tag.
+
+    Args:
+        label: Tag label to close
+        end_date: End date in YYYY-MM-DD format
+
+    Returns:
+        True if tag was ended, False if no matching ongoing tag found
+    """
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "UPDATE tags SET end_date = ? WHERE label = ? AND end_date IS NULL",
+            (end_date, label),
+        )
+        return cursor.rowcount > 0
+
+
+def get_tags(tag_date: Optional[str] = None) -> list:
+    """Get tags, optionally filtered by date.
+
+    Args:
+        tag_date: Optional date filter (YYYY-MM-DD)
+
+    Returns:
+        List of dicts with id, tag_date, label, created_at
+    """
+    if tag_date:
+        query = "SELECT * FROM tags WHERE tag_date = ? ORDER BY created_at"
+        params = (tag_date,)
+    else:
+        query = "SELECT * FROM tags ORDER BY tag_date DESC, created_at"
+        params = ()
+
+    with get_connection() as conn:
+        cursor = conn.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_tagged_dates() -> set:
+    """Get set of dates that have tags.
+
+    Returns:
+        Set of date strings (YYYY-MM-DD) for O(1) lookup
+    """
+    query = "SELECT DISTINCT tag_date FROM tags"
+    with get_connection() as conn:
+        cursor = conn.execute(query)
+        return {row[0] for row in cursor.fetchall()}
+
+
+def remove_tag(tag_date: str, label: Optional[str] = None) -> int:
+    """Remove tag(s) for a date.
+
+    Args:
+        tag_date: Date in YYYY-MM-DD format
+        label: If provided, only remove this specific tag.
+               If None, remove ALL tags for the date.
+
+    Returns:
+        Number of tags removed
+    """
+    with get_connection() as conn:
+        if label:
+            cursor = conn.execute(
+                "DELETE FROM tags WHERE tag_date = ? AND label = ?",
+                (tag_date, label),
+            )
+        else:
+            cursor = conn.execute(
+                "DELETE FROM tags WHERE tag_date = ?",
+                (tag_date,),
+            )
+        return cursor.rowcount

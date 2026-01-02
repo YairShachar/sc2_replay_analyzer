@@ -615,3 +615,197 @@ class TestGetUniqueMapNames:
 
         result = db.get_unique_map_names()
         assert result.count("Same Map") == 1
+
+
+class TestTagsTable:
+    """Tests for tags table initialization."""
+
+    def test_init_db_creates_tags_table(self, initialized_db):
+        """init_db creates the tags table."""
+        conn = sqlite3.connect(str(initialized_db))
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='tags'"
+        )
+        result = cursor.fetchone()
+        conn.close()
+
+        assert result is not None
+        assert result[0] == "tags"
+
+    def test_init_db_creates_tags_index(self, initialized_db):
+        """init_db creates tags date index."""
+        conn = sqlite3.connect(str(initialized_db))
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+        )
+        indexes = [row[0] for row in cursor.fetchall()]
+        conn.close()
+
+        assert "idx_tags_date" in indexes
+
+
+class TestAddTag:
+    """Tests for add_tag function."""
+
+    def test_add_tag_success(self, initialized_db):
+        """add_tag adds a new tag and returns True."""
+        from sc2_replay_analyzer.db import add_tag, get_tags
+
+        result = add_tag("2024-01-15", "Practicing macro")
+        assert result is True
+
+        tags = get_tags()
+        assert len(tags) == 1
+        assert tags[0]["tag_date"] == "2024-01-15"
+        assert tags[0]["label"] == "Practicing macro"
+
+    def test_add_tag_duplicate_returns_false(self, initialized_db):
+        """add_tag returns False for duplicate date+label."""
+        from sc2_replay_analyzer.db import add_tag
+
+        add_tag("2024-01-15", "Same label")
+        result = add_tag("2024-01-15", "Same label")
+
+        assert result is False
+
+    def test_add_tag_multiple_per_date(self, initialized_db):
+        """add_tag allows multiple different tags for same date."""
+        from sc2_replay_analyzer.db import add_tag, get_tags
+
+        add_tag("2024-01-15", "Tag 1")
+        add_tag("2024-01-15", "Tag 2")
+        add_tag("2024-01-15", "Tag 3")
+
+        tags = get_tags("2024-01-15")
+        assert len(tags) == 3
+        labels = {t["label"] for t in tags}
+        assert labels == {"Tag 1", "Tag 2", "Tag 3"}
+
+    def test_add_tag_different_dates(self, initialized_db):
+        """add_tag allows same label on different dates."""
+        from sc2_replay_analyzer.db import add_tag, get_tags
+
+        result1 = add_tag("2024-01-15", "Same label")
+        result2 = add_tag("2024-01-16", "Same label")
+
+        assert result1 is True
+        assert result2 is True
+        assert len(get_tags()) == 2
+
+
+class TestGetTags:
+    """Tests for get_tags function."""
+
+    def test_get_tags_empty(self, initialized_db):
+        """get_tags returns empty list when no tags."""
+        from sc2_replay_analyzer.db import get_tags
+
+        tags = get_tags()
+        assert tags == []
+
+    def test_get_tags_all(self, initialized_db):
+        """get_tags returns all tags when no filter."""
+        from sc2_replay_analyzer.db import add_tag, get_tags
+
+        add_tag("2024-01-15", "Tag 1")
+        add_tag("2024-01-16", "Tag 2")
+        add_tag("2024-01-17", "Tag 3")
+
+        tags = get_tags()
+        assert len(tags) == 3
+
+    def test_get_tags_filter_by_date(self, initialized_db):
+        """get_tags filters by date when provided."""
+        from sc2_replay_analyzer.db import add_tag, get_tags
+
+        add_tag("2024-01-15", "Tag 1")
+        add_tag("2024-01-15", "Tag 2")
+        add_tag("2024-01-16", "Other tag")
+
+        tags = get_tags("2024-01-15")
+        assert len(tags) == 2
+        for t in tags:
+            assert t["tag_date"] == "2024-01-15"
+
+    def test_get_tags_ordered_by_date_desc(self, initialized_db):
+        """get_tags returns tags ordered by date descending."""
+        from sc2_replay_analyzer.db import add_tag, get_tags
+
+        add_tag("2024-01-10", "Old")
+        add_tag("2024-01-20", "New")
+        add_tag("2024-01-15", "Middle")
+
+        tags = get_tags()
+        dates = [t["tag_date"] for t in tags]
+        assert dates == ["2024-01-20", "2024-01-15", "2024-01-10"]
+
+
+class TestGetTaggedDates:
+    """Tests for get_tagged_dates function."""
+
+    def test_get_tagged_dates_empty(self, initialized_db):
+        """get_tagged_dates returns empty set when no tags."""
+        from sc2_replay_analyzer.db import get_tagged_dates
+
+        result = get_tagged_dates()
+        assert result == set()
+
+    def test_get_tagged_dates_unique(self, initialized_db):
+        """get_tagged_dates returns unique dates."""
+        from sc2_replay_analyzer.db import add_tag, get_tagged_dates
+
+        add_tag("2024-01-15", "Tag 1")
+        add_tag("2024-01-15", "Tag 2")  # Same date
+        add_tag("2024-01-16", "Tag 3")
+
+        result = get_tagged_dates()
+        assert result == {"2024-01-15", "2024-01-16"}
+
+
+class TestRemoveTag:
+    """Tests for remove_tag function."""
+
+    def test_remove_tag_specific_label(self, initialized_db):
+        """remove_tag removes specific label."""
+        from sc2_replay_analyzer.db import add_tag, remove_tag, get_tags
+
+        add_tag("2024-01-15", "Keep")
+        add_tag("2024-01-15", "Remove")
+
+        count = remove_tag("2024-01-15", "Remove")
+        assert count == 1
+
+        tags = get_tags("2024-01-15")
+        assert len(tags) == 1
+        assert tags[0]["label"] == "Keep"
+
+    def test_remove_tag_all_for_date(self, initialized_db):
+        """remove_tag without label removes all tags for date."""
+        from sc2_replay_analyzer.db import add_tag, remove_tag, get_tags
+
+        add_tag("2024-01-15", "Tag 1")
+        add_tag("2024-01-15", "Tag 2")
+        add_tag("2024-01-16", "Other")
+
+        count = remove_tag("2024-01-15")
+        assert count == 2
+
+        all_tags = get_tags()
+        assert len(all_tags) == 1
+        assert all_tags[0]["tag_date"] == "2024-01-16"
+
+    def test_remove_tag_nonexistent(self, initialized_db):
+        """remove_tag returns 0 for nonexistent tag."""
+        from sc2_replay_analyzer.db import remove_tag
+
+        count = remove_tag("2024-01-15", "Nonexistent")
+        assert count == 0
+
+    def test_remove_tag_nonexistent_date(self, initialized_db):
+        """remove_tag returns 0 for nonexistent date."""
+        from sc2_replay_analyzer.db import add_tag, remove_tag
+
+        add_tag("2024-01-15", "Tag")
+
+        count = remove_tag("2024-01-20")
+        assert count == 0

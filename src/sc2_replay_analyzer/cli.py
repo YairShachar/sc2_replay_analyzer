@@ -198,24 +198,30 @@ def ensure_config():
 
 
 def _start_overlay_server():
-    """Start overlay server if enabled and Flask is available."""
+    """Start overlay server if enabled and Flask is available.
+
+    Returns the port number if server started, None otherwise.
+    """
     if not is_server_enabled():
-        return
+        return None
 
     try:
         from .server import is_flask_available, start_server_background
     except ImportError:
-        return  # Server module not available
+        return None  # Server module not available
 
     if not is_flask_available():
-        return  # Silently skip if Flask not installed
+        return None  # Silently skip if Flask not installed
 
     port = get_server_port()
     actual_port, _ = start_server_background(port=port)
     if actual_port:
+        ui.console.print(f"[dim]Hosting on http://localhost:{actual_port}/[/dim]")
         ui.console.print(
-            f"[dim]Overlay server: http://localhost:{actual_port}/overlays/mmr-graph[/dim]"
+            f"[dim]  └─ Overlay: http://localhost:{actual_port}/overlays/mmr-graph[/dim]"
         )
+        return actual_port
+    return None
 
 
 def cmd_config(args):
@@ -342,8 +348,127 @@ def cmd_live(args):
     ensure_config()
     db.init_db()
     auto_scan()
-    _start_overlay_server()
-    ui.run_interactive_mode()
+    server_port = _start_overlay_server()
+    ui.run_interactive_mode(server_port=server_port)
+
+
+def cmd_tag(args):
+    """Add a tag."""
+    from datetime import datetime
+
+    ensure_config()
+    db.init_db()
+
+    label = args.label
+    tag_date = args.date
+
+    # If no date provided, create ongoing tag from today
+    if tag_date is None:
+        tag_date = datetime.now().strftime("%Y-%m-%d")
+        # Check for ongoing tags and notify
+        ongoing_tags = db.get_ongoing_tags()
+        if ongoing_tags:
+            ongoing_labels = [t["label"] for t in ongoing_tags]
+            ui.console.print(f"[dim]Note: {len(ongoing_tags)} ongoing tag(s): {', '.join(ongoing_labels)}[/dim]")
+
+        if db.add_tag(tag_date, label):
+            color = ui.get_tag_color(label)
+            ui.console.print(f"[green]Started ongoing tag:[/green] [{color}]▸[/{color}] {label} (from {tag_date})")
+        else:
+            ui.console.print(f"[yellow]Tag already exists:[/yellow] {label} from {tag_date}")
+        return
+
+    # Validate date format
+    if not ui.is_valid_date(tag_date):
+        ui.console.print(f"[red]Invalid date format: {tag_date}. Use YYYY-MM-DD[/red]")
+        return
+
+    # Single date tag (with end_date = tag_date)
+    if db.add_tag(tag_date, label, end_date=tag_date):
+        color = ui.get_tag_color(label)
+        ui.console.print(f"[green]Added tag:[/green] [{color}]◆[/{color}] {label} on {tag_date}")
+    else:
+        ui.console.print(f"[yellow]Tag already exists:[/yellow] {label} on {tag_date}")
+
+
+def cmd_tag_start(args):
+    """Start an ongoing tag."""
+    from datetime import datetime
+
+    ensure_config()
+    db.init_db()
+
+    label = args.label
+    tag_date = args.date or datetime.now().strftime("%Y-%m-%d")
+
+    # Validate date format
+    if args.date and not ui.is_valid_date(tag_date):
+        ui.console.print(f"[red]Invalid date format: {tag_date}. Use YYYY-MM-DD[/red]")
+        return
+
+    # Check for ongoing tags and notify
+    ongoing_tags = db.get_ongoing_tags()
+    if ongoing_tags:
+        ongoing_labels = [t["label"] for t in ongoing_tags]
+        ui.console.print(f"[dim]Note: {len(ongoing_tags)} ongoing tag(s): {', '.join(ongoing_labels)}[/dim]")
+
+    if db.add_tag(tag_date, label):
+        color = ui.get_tag_color(label)
+        ui.console.print(f"[green]Started ongoing tag:[/green] [{color}]▸[/{color}] {label} (from {tag_date})")
+    else:
+        ui.console.print(f"[yellow]Tag already exists:[/yellow] {label} from {tag_date}")
+
+
+def cmd_tag_end(args):
+    """End an ongoing tag."""
+    from datetime import datetime
+
+    ensure_config()
+    db.init_db()
+
+    label = args.label
+    end_date = args.date or datetime.now().strftime("%Y-%m-%d")
+
+    # Validate date format
+    if args.date and not ui.is_valid_date(end_date):
+        ui.console.print(f"[red]Invalid date format: {end_date}. Use YYYY-MM-DD[/red]")
+        return
+
+    if db.end_tag(label, end_date):
+        color = ui.get_tag_color(label)
+        ui.console.print(f"[green]Ended tag:[/green] [{color}]◆─◆[/{color}] {label} (ended {end_date})")
+    else:
+        ui.console.print(f"[yellow]No ongoing tag found:[/yellow] {label}")
+
+
+def cmd_tags(args):
+    """List all tags."""
+    ensure_config()
+    db.init_db()
+    ui.show_tags()
+
+
+def cmd_untag(args):
+    """Remove tag(s) from a date."""
+    ensure_config()
+    db.init_db()
+
+    tag_date = args.date
+    label = args.label  # May be None
+
+    # Validate date format
+    if not ui.is_valid_date(tag_date):
+        ui.console.print(f"[red]Invalid date format: {tag_date}. Use YYYY-MM-DD[/red]")
+        return
+
+    count = db.remove_tag(tag_date, label)
+    if count > 0:
+        if label:
+            ui.console.print(f"[green]Removed tag:[/green] {label} from {tag_date}")
+        else:
+            ui.console.print(f"[green]Removed {count} tag(s)[/green] from {tag_date}")
+    else:
+        ui.console.print(f"[yellow]No matching tags found for {tag_date}[/yellow]")
 
 
 def cmd_columns(args):
@@ -469,6 +594,39 @@ def main():
     )
     columns_parser.set_defaults(func=cmd_columns)
 
+    # tag command - flexible: tag "label" (ongoing) or tag <date> "label" (single)
+    tag_parser = subparsers.add_parser("tag", help="Add a tag (ongoing if no date)")
+    tag_parser.add_argument("date_or_label", help="Date (YYYY-MM-DD) or label if no date")
+    tag_parser.add_argument("label", nargs="?", help="Tag label (if date provided)")
+    tag_parser.set_defaults(func=lambda args: cmd_tag(
+        argparse.Namespace(
+            date=args.date_or_label if args.label else None,
+            label=args.label or args.date_or_label
+        )
+    ))
+
+    # tag-start command
+    tag_start_parser = subparsers.add_parser("tag-start", help="Start an ongoing tag")
+    tag_start_parser.add_argument("label", help="Tag label")
+    tag_start_parser.add_argument("--date", "-d", help="Start date (default: today)")
+    tag_start_parser.set_defaults(func=cmd_tag_start)
+
+    # tag-end command
+    tag_end_parser = subparsers.add_parser("tag-end", help="End an ongoing tag")
+    tag_end_parser.add_argument("label", help="Tag label to end")
+    tag_end_parser.add_argument("--date", "-d", help="End date (default: today)")
+    tag_end_parser.set_defaults(func=cmd_tag_end)
+
+    # tags command
+    tags_parser = subparsers.add_parser("tags", help="List all tags")
+    tags_parser.set_defaults(func=cmd_tags)
+
+    # untag command
+    untag_parser = subparsers.add_parser("untag", help="Remove tag(s) from a date")
+    untag_parser.add_argument("date", help="Date in YYYY-MM-DD format")
+    untag_parser.add_argument("label", nargs="?", help="Specific tag label (optional)")
+    untag_parser.set_defaults(func=cmd_untag)
+
     args = parser.parse_args()
 
     # Default behavior: auto-scan and launch live mode
@@ -478,8 +636,8 @@ def main():
         ensure_config()
         db.init_db()
         auto_scan()
-        _start_overlay_server()
-        ui.run_interactive_mode()
+        server_port = _start_overlay_server()
+        ui.run_interactive_mode(server_port=server_port)
         return
 
     args.func(args)

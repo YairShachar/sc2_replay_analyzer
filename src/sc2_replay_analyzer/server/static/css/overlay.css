@@ -127,10 +127,61 @@ body {
     color: #ffffff;
 }
 
+/* Tag legend - horizontal scrollable strip */
+.tag-legend {
+    display: flex;
+    gap: 16px;
+    padding: 4px 20px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    min-height: 22px;
+    align-items: center;
+    background: rgba(0, 0, 0, 0.2);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.tag-legend::-webkit-scrollbar {
+    display: none;
+}
+
+.tag-legend:empty {
+    display: none;
+}
+
+.tag-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.tag-icon {
+    font-size: 10px;
+    text-shadow: 0 0 6px currentColor;
+    font-family: 'Roboto Mono', monospace;
+    letter-spacing: -1px;
+}
+
+.tag-label {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.8);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
 /* Chart container */
 .chart-container {
     padding: 10px 20px 20px 20px;
     height: calc(100% - 60px);
+}
+
+/* Adjust chart height when legend is visible */
+.overlay-container:has(.tag-legend:not(:empty)) .chart-container {
+    height: calc(100% - 82px);
 }
 
 #mmrChart {

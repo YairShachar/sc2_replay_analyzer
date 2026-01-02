@@ -127,6 +127,10 @@ FILTER_COMMANDS = {
 # Simple commands without values
 SIMPLE_COMMANDS = {
     "columns": ("columns", "Manage display columns"),
+    "tags": ("tags", "List all tags"),
+    "tag": ("tag", "Add tag to a date"),
+    "untag": ("untag", "Remove tag(s) from a date"),
+    "endpoints": ("endpoints", "Show server endpoints"),
     "clear": ("clear", "Reset all filters"),
     "help": ("help", "Show help"),
     "quit": ("q", "Quit"),

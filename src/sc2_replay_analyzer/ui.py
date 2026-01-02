@@ -30,6 +30,50 @@ from .config import (
 
 console = Console()
 
+# Tag color palette (deterministic assignment based on label hash)
+TAG_COLORS = [
+    "#00d4ff",  # cyan
+    "#b966ff",  # purple
+    "#ffd700",  # yellow
+    "#ff6bcd",  # pink
+    "#00ffc8",  # teal
+    "#6b9dff",  # blue
+]
+
+
+def get_tag_color(label: str) -> str:
+    """Get deterministic color for a tag label."""
+    return TAG_COLORS[hash(label) % len(TAG_COLORS)]
+
+
+def is_valid_date(date_str: str) -> bool:
+    """Check if string is valid YYYY-MM-DD format."""
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
+
+
+def get_date_from_position(pos: int, replays: list) -> Optional[str]:
+    """Get date string from 1-indexed position in replay list.
+
+    Args:
+        pos: 1-indexed position (as displayed in table)
+        replays: List of replay dicts
+
+    Returns:
+        Date string (YYYY-MM-DD) or None if invalid position
+    """
+    if not replays or pos < 1 or pos > len(replays):
+        return None
+    replay = replays[pos - 1]  # Convert to 0-indexed
+    played_at = replay.get("played_at")
+    if played_at:
+        # Extract just the date part (YYYY-MM-DD)
+        return played_at[:10]
+    return None
+
 
 def format_duration(seconds: int) -> str:
     """Format seconds as MM:SS or HH:MM:SS."""
@@ -102,13 +146,25 @@ def format_mmr(player_mmr: Optional[int], opponent_mmr: Optional[int]) -> Text:
     return text
 
 
-def get_column_value(col_key: str, r: dict):
+def format_date_with_tag(played_at: Optional[str], tagged_dates: set) -> Text:
+    """Format date with tag marker if date is tagged."""
+    formatted = format_date(played_at)
+    if played_at and played_at[:10] in tagged_dates:
+        text = Text()
+        text.append("* ", style="bold cyan")
+        text.append(formatted, style="dim")
+        return text
+    return Text(formatted, style="dim")
+
+
+def get_column_value(col_key: str, r: dict, tagged_dates: Optional[set] = None):
     """Get formatted value for a column key from a replay dict."""
     benchmark_6m = get_benchmark_workers_6m()
     benchmark_8m = get_benchmark_workers_8m()
+    tagged = tagged_dates or set()
 
     renderers = {
-        "date": lambda: format_date(r.get("played_at")),
+        "date": lambda: format_date_with_tag(r.get("played_at"), tagged),
         "map": lambda: (r.get("map_name") or "-")[:14],
         "opponent": lambda: (r.get("opponent_name") or "-")[:16],
         "matchup": lambda: r.get("matchup") or "-",
@@ -132,8 +188,13 @@ def get_column_value(col_key: str, r: dict):
     return renderer()
 
 
-def show_replays_table(replays: list):
-    """Display replays in a rich table with configurable columns."""
+def show_replays_table(replays: list, tagged_dates: Optional[set] = None):
+    """Display replays in a rich table with configurable columns.
+
+    Args:
+        replays: List of replay dicts to display
+        tagged_dates: Optional set of dates (YYYY-MM-DD) that have tags
+    """
     if not replays:
         console.print("[yellow]No replays found.[/yellow]")
         return
@@ -145,12 +206,13 @@ def show_replays_table(replays: list):
     for col_key in display_columns:
         if col_key in AVAILABLE_COLUMNS:
             header, width, justify = AVAILABLE_COLUMNS[col_key]
-            style = "dim" if col_key == "date" else None
-            table.add_column(header, width=width, justify=justify, style=style)
+            # Don't set style here - format_date_with_tag handles it
+            table.add_column(header, width=width, justify=justify)
 
     # Add rows
+    tagged = tagged_dates or set()
     for r in replays:
-        row_values = [get_column_value(col_key, r) for col_key in display_columns if col_key in AVAILABLE_COLUMNS]
+        row_values = [get_column_value(col_key, r, tagged) for col_key in display_columns if col_key in AVAILABLE_COLUMNS]
         table.add_row(*row_values)
 
     console.print(table)
@@ -632,6 +694,86 @@ def parse_filter_command(cmd: str, state: FilterState) -> tuple:
         console.print("[green]Columns reset to defaults[/green]")
         return state, None
 
+    # Parse tags command (list all tags)
+    if cmd.lower() == 'tags':
+        return state, "TAGS"
+
+    # Parse endpoints command (show server endpoints)
+    if cmd.lower() in ('endpoints', 'server'):
+        return state, "ENDPOINTS"
+
+    # Parse tag end command: tag end "label" or tag end 2025-01-15 "label"
+    # With date
+    match = re.match(r'tag\s+end\s+(\d{4}-\d{2}-\d{2})\s+["\'](.+)["\']$', cmd)
+    if match:
+        end_date, label = match.groups()
+        return state, ("TAG_END", end_date, label)
+    match = re.match(r'tag\s+end\s+(\d{4}-\d{2}-\d{2})\s+(.+)$', cmd)
+    if match:
+        end_date, label = match.groups()
+        return state, ("TAG_END", end_date, label.strip())
+    # Without date (use today)
+    match = re.match(r'tag\s+end\s+["\'](.+)["\']$', cmd)
+    if match:
+        return state, ("TAG_END", None, match.group(1))
+    match = re.match(r'tag\s+end\s+(.+)$', cmd)
+    if match:
+        return state, ("TAG_END", None, match.group(1).strip())
+
+    # Parse tag start command: tag start "label" or tag start 2025-01-15 "label"
+    # With date
+    match = re.match(r'tag\s+start\s+(\d{4}-\d{2}-\d{2})\s+["\'](.+)["\']$', cmd)
+    if match:
+        start_date, label = match.groups()
+        return state, ("TAG_START", start_date, label)
+    match = re.match(r'tag\s+start\s+(\d{4}-\d{2}-\d{2})\s+(.+)$', cmd)
+    if match:
+        start_date, label = match.groups()
+        return state, ("TAG_START", start_date, label.strip())
+    # Without date (use today)
+    match = re.match(r'tag\s+start\s+["\'](.+)["\']$', cmd)
+    if match:
+        return state, ("TAG_START", None, match.group(1))
+    match = re.match(r'tag\s+start\s+(.+)$', cmd)
+    if match:
+        return state, ("TAG_START", None, match.group(1).strip())
+
+    # Parse tag command (ongoing from today): tag "label"
+    match = re.match(r'tag\s+["\'](.+)["\']$', cmd)
+    if match:
+        return state, ("TAG_START", None, match.group(1))
+
+    # Parse tag command with date: tag <date|position> "<label>" (single-day tag)
+    # Match: tag 2024-01-15 "Label" or tag 3 "Label"
+    match = re.match(r'tag\s+(\S+)\s+["\'](.+)["\']$', cmd)
+    if match:
+        date_or_pos, label = match.groups()
+        return state, ("TAG", date_or_pos, label)
+
+    # Also support without quotes: tag 2024-01-15 Label here
+    match = re.match(r'tag\s+(\S+)\s+(.+)$', cmd)
+    if match:
+        date_or_pos, label = match.groups()
+        return state, ("TAG", date_or_pos, label.strip())
+
+    # Parse untag command: untag <date|position> ["<label>"]
+    match = re.match(r'untag\s+(\S+)\s+["\'](.+)["\']$', cmd)
+    if match:
+        date_or_pos, label = match.groups()
+        return state, ("UNTAG", date_or_pos, label)
+
+    # Untag with unquoted label
+    match = re.match(r'untag\s+(\S+)\s+(.+)$', cmd)
+    if match:
+        date_or_pos, label = match.groups()
+        return state, ("UNTAG", date_or_pos, label.strip())
+
+    # Untag without label (remove all for date)
+    match = re.match(r'untag\s+(\S+)$', cmd)
+    if match:
+        date_or_pos = match.group(1)
+        return state, ("UNTAG", date_or_pos, None)
+
     return state, f"Unknown command: {cmd}"
 
 
@@ -651,6 +793,77 @@ def show_columns():
     console.print(f"[dim]Current: {', '.join(current_columns)}[/dim]")
     console.print()
     console.print("[dim]Use 'columns add <col>' or 'columns remove <col>' to modify[/dim]")
+
+
+def show_tags():
+    """Display all tags grouped by type (ongoing vs completed/single)."""
+    from . import db
+
+    tags = db.get_tags()
+    if not tags:
+        console.print("[yellow]No tags found.[/yellow]")
+        return
+
+    console.print()
+    console.print("[bold cyan]Tags:[/bold cyan]")
+    console.print()
+
+    # Separate ongoing from completed/single
+    ongoing = [t for t in tags if t.get("end_date") is None]
+    completed = [t for t in tags if t.get("end_date") is not None]
+
+    # Show ongoing tags first
+    if ongoing:
+        console.print("  [bold yellow]Ongoing:[/bold yellow]")
+        for tag in ongoing:
+            color = get_tag_color(tag["label"])
+            console.print(f"    [{color}]▸[/{color}] {tag['label']} [dim](since {tag['tag_date']})[/dim]")
+        console.print()
+
+    # Show completed/single tags grouped by date
+    if completed:
+        console.print("  [bold]Completed/Single:[/bold]")
+        from collections import defaultdict
+        by_date = defaultdict(list)
+        for tag in completed:
+            by_date[tag["tag_date"]].append(tag)
+
+        for date in sorted(by_date.keys(), reverse=True):
+            tags_on_date = by_date[date]
+            console.print(f"    [bold]{date}[/bold]")
+            for tag in tags_on_date:
+                color = get_tag_color(tag["label"])
+                end_date = tag.get("end_date")
+                if end_date and end_date != date:
+                    # Range tag
+                    console.print(f"      [{color}]◆─◆[/{color}] {tag['label']} [dim]→ {end_date}[/dim]")
+                else:
+                    # Single date tag
+                    console.print(f"      [{color}]◆[/{color}] {tag['label']}")
+        console.print()
+    elif not ongoing:
+        console.print()  # Just add spacing if we only showed ongoing
+
+
+def show_endpoints(server_port: Optional[int]):
+    """Display available server endpoints."""
+    console.print()
+    if server_port is None:
+        console.print("[yellow]Server not running.[/yellow]")
+        console.print("[dim]Enable with: server_enabled = true in config[/dim]")
+        return
+
+    base_url = f"http://localhost:{server_port}"
+    console.print("[bold cyan]Server Endpoints:[/bold cyan]")
+    console.print()
+    console.print(f"  [bold]Base URL:[/bold]        {base_url}/")
+    console.print()
+    console.print("  [bold cyan]Overlays:[/bold cyan]")
+    console.print(f"    MMR Graph:      {base_url}/overlays/mmr-graph")
+    console.print()
+    console.print("  [bold cyan]API:[/bold cyan]")
+    console.print(f"    MMR History:    {base_url}/api/v1/mmr/history")
+    console.print()
 
 
 def show_help():
@@ -673,8 +886,22 @@ def show_help():
         "  [green]columns remove <col>[/green] Remove column(s)     [dim]e.g. columns remove mmr[/dim]",
         "  [green]columns reset[/green]       Reset to defaults",
         "",
+        "[bold cyan]Tag Commands:[/bold cyan]",
+        "",
+        "  [green]tag \"<label>\"[/green]          Start ongoing tag from today  [dim]e.g. tag \"Practicing 1/1/1\"[/dim]",
+        "  [green]tag start <label>[/green]     Start ongoing tag from today  [dim]e.g. tag start \"New build\"[/dim]",
+        "  [green]tag start <date> <label>[/green] Start from specific date   [dim]e.g. tag start 2025-01-01 \"Macro focus\"[/dim]",
+        "  [green]tag end <label>[/green]       End ongoing tag today         [dim]e.g. tag end \"Practicing 1/1/1\"[/dim]",
+        "  [green]tag end <date> <label>[/green] End on specific date         [dim]e.g. tag end 2025-01-15 \"New build\"[/dim]",
+        "  [green]tag <date> <label>[/green]   Single-date tag               [dim]e.g. tag 2025-01-15 \"Coaching session\"[/dim]",
+        "  [green]tag <pos> <label>[/green]    Tag by table position         [dim]e.g. tag 3 \"Good game\"[/dim]",
+        "  [green]tags[/green]                 List all tags",
+        "  [green]untag <date>[/green]         Remove all tags               [dim]e.g. untag 2025-01-15[/dim]",
+        "  [green]untag <date> <label>[/green] Remove specific tag           [dim]e.g. untag 2025-01-15 \"Old tag\"[/dim]",
+        "",
         "[bold cyan]Other:[/bold cyan]",
         "",
+        "  [yellow]endpoints[/yellow]    Show server endpoints",
         "  [yellow]clear[/yellow]        Reset all filters",
         "  [yellow]help[/yellow]         Show this help",
         "  [yellow]q[/yellow]            Quit",
@@ -685,8 +912,12 @@ def show_help():
     console.print("\n".join(lines))
 
 
-def run_interactive_mode():
-    """Run the interactive filtering mode."""
+def run_interactive_mode(server_port: Optional[int] = None):
+    """Run the interactive filtering mode.
+
+    Args:
+        server_port: Port the overlay server is running on, if any
+    """
     from . import db
 
     db.init_db()
@@ -705,6 +936,8 @@ def run_interactive_mode():
     console.print()
 
     need_refresh = True  # Flag to control when to redraw table
+    replays = []  # Keep track of current replays for position-based tagging
+    pending_message = None  # Message to show after table refresh
 
     while True:
         if need_refresh:
@@ -734,8 +967,11 @@ def run_interactive_mode():
             if state.prev_games > 0 or state.next_games > 0:
                 replays = db.expand_results(replays, state.prev_games, state.next_games)
 
+            # Get tagged dates for display
+            tagged_dates = db.get_tagged_dates()
+
             # Display table
-            show_replays_table(replays)
+            show_replays_table(replays, tagged_dates)
 
             # Show summary row
             show_summary_row(replays)
@@ -743,6 +979,11 @@ def run_interactive_mode():
             # Show filter status below table
             filter_desc = state.describe(len(replays))
             console.print(f"[dim]{filter_desc}[/dim]")
+
+            # Show pending message after table if any
+            if pending_message:
+                console.print(pending_message)
+                pending_message = None
 
         need_refresh = True  # Default to refresh on next iteration
 
@@ -767,6 +1008,108 @@ def run_interactive_mode():
         elif error == "COLUMNS":
             show_columns()
             need_refresh = False  # Stay on current view after columns
+        elif error == "TAGS":
+            show_tags()
+            need_refresh = False
+        elif error == "ENDPOINTS":
+            show_endpoints(server_port)
+            need_refresh = False
+        elif isinstance(error, tuple) and error[0] == "TAG_START":
+            _, start_date, label = error
+            # Use today if no date provided
+            if start_date is None:
+                start_date = datetime.now().strftime("%Y-%m-%d")
+            elif not is_valid_date(start_date):
+                console.print(f"[red]Invalid date format: {start_date}. Use YYYY-MM-DD[/red]")
+                need_refresh = False
+                continue
+
+            # Check for ongoing tags and notify user
+            ongoing_tags = db.get_ongoing_tags()
+            if ongoing_tags:
+                ongoing_labels = [t["label"] for t in ongoing_tags]
+                console.print(f"[dim]Note: {len(ongoing_tags)} ongoing tag(s): {', '.join(ongoing_labels)}[/dim]")
+
+            # Add the ongoing tag
+            if db.add_tag(start_date, label):
+                color = get_tag_color(label)
+                pending_message = f"[green]Started ongoing tag:[/green] [{color}]▸[/{color}] {label} (from {start_date})"
+            else:
+                pending_message = f"[yellow]Tag already exists:[/yellow] {label} from {start_date}"
+            need_refresh = True
+
+        elif isinstance(error, tuple) and error[0] == "TAG_END":
+            _, end_date, label = error
+            # Use today if no date provided
+            if end_date is None:
+                end_date = datetime.now().strftime("%Y-%m-%d")
+            elif not is_valid_date(end_date):
+                console.print(f"[red]Invalid date format: {end_date}. Use YYYY-MM-DD[/red]")
+                need_refresh = False
+                continue
+
+            # End the ongoing tag
+            if db.end_tag(label, end_date):
+                color = get_tag_color(label)
+                pending_message = f"[green]Ended tag:[/green] [{color}]◆─◆[/{color}] {label} (ended {end_date})"
+            else:
+                pending_message = f"[yellow]No ongoing tag found:[/yellow] {label}"
+            need_refresh = True
+
+        elif isinstance(error, tuple) and error[0] == "TAG":
+            _, date_or_pos, label = error
+            # Resolve position to date if needed
+            if date_or_pos.isdigit():
+                tag_date = get_date_from_position(int(date_or_pos), replays)
+                if not tag_date:
+                    console.print(f"[red]Invalid position: {date_or_pos}[/red]")
+                    need_refresh = False
+                    continue
+            elif is_valid_date(date_or_pos):
+                tag_date = date_or_pos
+            else:
+                console.print(f"[red]Invalid date format: {date_or_pos}. Use YYYY-MM-DD[/red]")
+                need_refresh = False
+                continue
+
+            # Check for ongoing tags and notify user
+            ongoing_tags = db.get_ongoing_tags()
+            if ongoing_tags:
+                ongoing_labels = [t["label"] for t in ongoing_tags]
+                console.print(f"[dim]Note: {len(ongoing_tags)} ongoing tag(s): {', '.join(ongoing_labels)}[/dim]")
+
+            # Add the tag (single date with same start/end)
+            if db.add_tag(tag_date, label, end_date=tag_date):
+                color = get_tag_color(label)
+                pending_message = f"[green]Added tag:[/green] [{color}]◆[/{color}] {label} on {tag_date}"
+            else:
+                pending_message = f"[yellow]Tag already exists:[/yellow] {label} on {tag_date}"
+            need_refresh = True  # Refresh to show tag marker
+        elif isinstance(error, tuple) and error[0] == "UNTAG":
+            _, date_or_pos, label = error
+            # Resolve position to date if needed
+            if date_or_pos.isdigit():
+                tag_date = get_date_from_position(int(date_or_pos), replays)
+                if not tag_date:
+                    console.print(f"[red]Invalid position: {date_or_pos}[/red]")
+                    need_refresh = False
+                    continue
+            elif is_valid_date(date_or_pos):
+                tag_date = date_or_pos
+            else:
+                console.print(f"[red]Invalid date format: {date_or_pos}. Use YYYY-MM-DD[/red]")
+                need_refresh = False
+                continue
+            # Remove the tag(s)
+            count = db.remove_tag(tag_date, label)
+            if count > 0:
+                if label:
+                    pending_message = f"[green]Removed tag:[/green] {label} from {tag_date}"
+                else:
+                    pending_message = f"[green]Removed {count} tag(s)[/green] from {tag_date}"
+            else:
+                pending_message = f"[yellow]No matching tags found for {tag_date}[/yellow]"
+            need_refresh = True  # Refresh to update tag markers
         elif error:
             console.print(f"[red]{error}[/red]")
             console.print("[dim]Type 'help' for available commands.[/dim]")
